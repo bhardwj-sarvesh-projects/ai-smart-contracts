@@ -16,8 +16,7 @@ interface RightAssistantProps {
 
 const PROVIDERS = [
   { id: 'auto', name: '✨ Auto Select', desc: 'Chooses best model' },
-  { id: 'gemini', name: 'Google Gemini', desc: 'Gemini 3.5 Flash / Pro' },
-  { id: 'openai', name: 'OpenAI GPT', desc: 'GPT-4o Enterprise' },
+  { id: 'openai', name: 'OpenAI GPT', desc: 'GPT-5.5 Enterprise' },
   { id: 'claude', name: 'Anthropic Claude', desc: 'Claude 3.5 Sonnet' },
   { id: 'deepseek', name: 'DeepSeek', desc: 'DeepSeek-V3 Coder' },
   { id: 'llama', name: 'Meta Llama', desc: 'Llama 3.1 405B' }
@@ -25,8 +24,7 @@ const PROVIDERS = [
 
 const MODELS: Record<string, string[]> = {
   auto: ['Intelligent Router'],
-  gemini: ['gemini-3.5-flash', 'gemini-3.1-pro-preview'],
-  openai: ['gpt-4o', 'o1-mini'],
+  openai: ['gpt-5.5', 'gpt-4o', 'o1-mini'],
   claude: ['claude-3-5-sonnet', 'claude-3-opus'],
   deepseek: ['deepseek-coder-v2', 'deepseek-chat'],
   llama: ['llama-3-70b-instruct', 'llama-3-405b']

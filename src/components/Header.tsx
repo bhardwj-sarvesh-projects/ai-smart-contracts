@@ -181,7 +181,7 @@ export default function Header({
                   : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600'
               }`}
               id="btn-audit-top"
-              title="Perform dynamic security audit via Gemini AI"
+              title="Perform dynamic security audit via OpenAI"
             >
               {isProcessing ? (
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
