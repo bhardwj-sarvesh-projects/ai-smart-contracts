@@ -4,6 +4,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { GeminiProvider, UsageTracker, AIProvider } from "./server/ai/AIProvider";
 
 dotenv.config();
 
@@ -46,29 +47,20 @@ function writeDb(data: any) {
   fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
 }
 
-// Initialize Gemini Client
-let ai: GoogleGenAI | null = null;
+// Initialize centralized AI Provider
+let aiProvider: AIProvider | null = null;
 if (process.env.GEMINI_API_KEY) {
   try {
-    ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
-    });
-    console.log("Gemini Client successfully initialized");
+    aiProvider = new GeminiProvider(process.env.GEMINI_API_KEY);
+    console.log("[AI PLATFORM] Centralized AI Provider initialized with Gemini backend");
   } catch (err) {
-    console.error("Failed to initialize Gemini Client", err);
+    console.error("[AI PLATFORM] Failed to initialize GeminiProvider", err);
   }
 } else {
-  console.log("No GEMINI_API_KEY found in process.env. Running with smart simulated generation fallbacks.");
+  console.log("[AI PLATFORM] No GEMINI_API_KEY found in process.env. Centralized Provider initialized as simulated fallback.");
 }
 
-// -------------------------------------------------------------
-// CORE AI UTILITY FOR STABILITY, TIMEOUTS & RETRIES
-// -------------------------------------------------------------
+// Backward-compatible wrapper calling into central AI provider
 async function callGeminiWithRetry(
   prompt: string,
   modelName: string = "gemini-3.5-flash",
@@ -76,51 +68,15 @@ async function callGeminiWithRetry(
   retries: number = 3,
   delayMs: number = 1000
 ): Promise<string> {
-  if (!ai) {
-    throw new Error("Gemini AI client is not initialized. Please configure GEMINI_API_KEY.");
+  if (!aiProvider) {
+    throw new Error("Centralized AI Provider is not initialized. Please configure GEMINI_API_KEY.");
   }
 
-  // Clean model name mappings to ensure standard official names are used
-  let standardModel = modelName;
-  if (!modelName || modelName === "Intelligent Router") {
-    standardModel = "gemini-3.1-pro-preview"; // Router defaults to Pro for complex coding
-  } else if (modelName.includes("flash")) {
-    standardModel = "gemini-3.5-flash";
-  } else if (modelName.includes("pro")) {
-    standardModel = "gemini-3.1-pro-preview";
-  }
+  const response = await aiProvider.generateContent(prompt, modelName, {
+    responseMimeType: responseMimeType === "application/json" ? "application/json" : undefined
+  });
 
-  let lastError: any = null;
-  for (let i = 0; i < retries; i++) {
-    try {
-      console.log(`[AI ROUTER] Calling model ${standardModel} (Attempt ${i + 1}/${retries})...`);
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout limit
-
-      const response = await ai.models.generateContent({
-        model: standardModel,
-        contents: prompt,
-        config: {
-          responseMimeType: responseMimeType === "application/json" ? "application/json" : undefined,
-        }
-      });
-
-      clearTimeout(timeoutId);
-
-      if (response && response.text) {
-        return response.text;
-      }
-      throw new Error("Empty response from Gemini");
-    } catch (err: any) {
-      lastError = err;
-      console.warn(`[AI ROUTER] Attempt ${i + 1} failed:`, err.message || err);
-      if (i < retries - 1) {
-        await new Promise(resolve => setTimeout(resolve, delayMs * Math.pow(2, i))); // exponential backoff
-      }
-    }
-  }
-  throw lastError;
+  return response.text;
 }
 
 // -------------------------------------------------------------
@@ -129,7 +85,7 @@ async function callGeminiWithRetry(
 
 // Health Check
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", mode: ai ? "live-gemini" : "simulated" });
+  res.json({ status: "ok", mode: aiProvider ? "live-gemini" : "simulated" });
 });
 
 // GET all projects
@@ -226,49 +182,43 @@ app.post("/api/generate-plan", async (req, res) => {
       return res.status(400).json({ error: "Prompt is required" });
     }
 
-    console.log(`Generating implementation plan for contract: ${contractType || 'custom'} on ${blockchain}`);
+    console.log(`[AI WORKSPACE ENGINE] REDESIGNING STAGE 1-5: Planning for contract type: ${contractType || 'custom'} on blockchain: ${blockchain}`);
 
     const planPrompt = `
-You are a Principal Smart Contract Architect. Generate a comprehensive, highly technical, production-ready Implementation Plan for a smart contract development project with the following requirements:
+You are a Lead Smart Contract Architect and Security Auditor. Generate an enterprise-level, production-ready Implementation Plan for a smart contract development project.
+You MUST execute and document the following internal stages:
+1. Requirement Analysis: Deconstruct the user request, mapping tokenomics, business rules, and transfer criteria.
+2. Technology & Blockchain Detection: Define constraints specifically for ${blockchain} (${language}).
+3. Framework & Compiler Selection: Select optimal compiler versions (e.g. solc 0.8.20 for Ethereum, cargo Anchor for Solana, Sui CLI for Move) and standard frameworks.
+4. Capability Validation: List critical design patterns (e.g., Ownable2Step, ReentrancyGuard, PDA keys check, authority signatures, custom errors).
+5. Architecture & Folder Structure Planning: Outline target file list and layout.
+
 Prompt: "${prompt}"
 Blockchain: "${blockchain}"
 Language: "${language}"
 Framework: "${framework}"
 Contract Type: "${contractType}"
 
-The plan MUST address:
-1. Business Requirements: What are the target goals and tokenomics?
-2. Architecture: What are the component parts, modules, and structures?
-3. Storage Design: What are the state variables, structures, maps, arrays, and keys?
-4. Permission Model: Access levels (Owner, Roles, Timelocks)?
-5. Events: What event logs should be defined?
-6. Custom Errors: List standard and gas-efficient custom errors.
-7. Validation Rules: List required input assertions and constraints.
-8. Security Considerations: How to prevent reentrancy, reentrancy guards, frontrunning, or overflow?
-9. Folder Structure: Planned workspace tree.
-10. Test Strategy: Unit tests and integration specs.
-11. Deployment Strategy: Deployment parameters, migrations, scripts, and target network.
-
 Format the output strictly as a JSON object with these keys:
 {
-  "businessRequirements": "string summary",
-  "architecture": "string summary",
-  "storageDesign": "string summary",
-  "permissionModel": "string summary",
-  "events": "string summary",
-  "customErrors": "string summary",
-  "validationRules": "string summary",
-  "securityConsiderations": "string summary",
-  "folderStructure": "string summary",
-  "testStrategy": "string summary",
-  "deploymentStrategy": "string summary"
+  "businessRequirements": "Detailed deconstructed analysis of functional parameters, assets, roles, and rules",
+  "architecture": "Decomposed system overview specifying base standard interfaces, inheritance, and libraries used",
+  "storageDesign": "Exact description of state variables, mappings, schemas, arrays, pack sizes, and key spaces",
+  "permissionModel": "Detailed modifier gates, ownership recovery models, roles management, and authority modifiers",
+  "events": "Comprehensive list of logging triggers, indexed params, and state changes",
+  "customErrors": "Detailed list of gas-efficient custom errors with matching throw criteria",
+  "validationRules": "Sanitization requirements, bounds checking, zero-address guards, and balance limits",
+  "securityConsiderations": "Checklist of reentrancy preventions, unchecked-calls protections, math overflow protection, PDA validations, and signer validations",
+  "folderStructure": "Target project folder tree structure adhering perfectly to official development frameworks",
+  "testStrategy": "Planned test cases, test environments, mocked dependencies, and edge case coverages",
+  "deploymentStrategy": "Deployment parameters, target gas limits, mainnet ingress parameters, and verification flow"
 }
 
 Do NOT output markdown wrappers, chat explanations, or conversational filler. Return only raw, parsing-valid JSON.
 `;
 
-    if (ai) {
-      const responseText = await callGeminiWithRetry(planPrompt, "gemini-3.5-flash", "application/json");
+    if (aiProvider) {
+      const responseText = await callGeminiWithRetry(planPrompt, "gemini-3.1-pro-preview", "application/json");
       const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
       const parsed = JSON.parse(cleaned);
       return res.json({
@@ -315,12 +265,12 @@ app.post("/api/generate", async (req, res) => {
       return res.status(400).json({ error: "Prompt is required" });
     }
 
-    console.log(`Generating contract using ${provider || 'Gemini'} model: ${model || 'default'}`);
+    console.log(`[AI WORKSPACE ENGINE] STAGE 6-10: Generating workspace files on blockchain: ${blockchain}`);
 
     // Create full specifications prompt with plan incorporated if present
     let extendedPrompt = `
-You are a Principal Smart Contract Architect and Security Auditor.
-Create a production-ready smart contract workspace based on this request:
+You are a Principal Smart Contract Architect and Lead Security Auditor.
+Create a production-ready, enterprise-grade smart contract workspace based on this request:
 "${prompt}"
 
 Blockchain Target: ${blockchain}
@@ -351,15 +301,18 @@ Do NOT invent compiler syntaxes, imports, or APIs. Use strictly official librari
 
     extendedPrompt += `
 Requirements:
-1. Improve the prompt internally. Expand it into a full enterprise software specification.
-2. Select standard design patterns, security controls, events, and validation.
-3. Generate complete, production-ready files including:
-   - Primary smart contract code file(s)
-   - Accompanying test file(s)
-   - Configuration file(s) (such as hardhat.config.js, Foundry's foundry.toml, or Anchor's Anchor.toml)
-   - Deployment script(s)
-   - Professional README.md with architecture, flow, deployment instructions, and usage details
-4. Perform a security audit on the generated code.
+1. Smart Contract Generation: Generate complete, syntactically perfect primary smart contracts. Avoid placeholders. Include zero-address checks, safe transfer logic, overflow protections, and access modifiers.
+2. Accompanying Test Suite: Write a comprehensive, complete unit test file (e.g. Mocha/Chai JS test or Anchor TS test) cover all public entry points, roles, and revert parameters.
+3. Configuration: Produce required config files (e.g., hardhat.config.js, foundry.toml, or Anchor.toml) referencing correct compilers.
+4. Deployment Scripts: Create the exact scripts/deploy.js or anchor deploy steps to register the contracts correctly.
+5. Documentation: Write a professional README.md summarizing business requirements, system architecture, build, test, and deploy guidelines.
+6. Security Analysis: Perform a comprehensive security audit of your own generated files, checking for:
+   - Reentrancy
+   - Access Control Modifier Security
+   - Unchecked Calls / Transfer Failures
+   - Safe Math & Overflow Vulnerabilities
+   - PDA and Account Signer Checks (for Solana Rust programs)
+   - Token Account Authority Validation
 
 YOU MUST output a JSON response conforming strictly to this JSON format:
 {
@@ -377,16 +330,16 @@ YOU MUST output a JSON response conforming strictly to this JSON format:
     "codeQuality": 95, // integer from 0 to 100
     "gasOptimization": 85, // integer from 0 to 100
     "complexity": 3, // integer from 1 to 10
-    "summary": "High-level summary of the audit findings",
+    "summary": "High-level summary of the audit findings mapping reentrancy, access controls, unsafe math, PDA validations, and token safety",
     "vulnerabilities": [
       {
         "id": "vuln-1",
-        "title": "Severity Title",
+        "title": "Vulnerability severity title",
         "severity": "critical|high|medium|low|informational",
-        "description": "Clear description of vulnerability",
+        "description": "Clear description of vulnerability, context, and attack vectors",
         "file": "path/to/vulnerable/file",
         "line": 15,
-        "recommendation": "Step-by-step recommendation",
+        "recommendation": "Step-by-step remediation or correction code",
         "fixAvailable": true
       }
     ]
@@ -395,8 +348,9 @@ YOU MUST output a JSON response conforming strictly to this JSON format:
 Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
 `;
 
-    if (ai) {
-      const responseText = await callGeminiWithRetry(extendedPrompt, model || "gemini-3.5-flash", "application/json");
+    if (aiProvider) {
+      // Use higher-capacity model for high-fidelity code generation
+      const responseText = await callGeminiWithRetry(extendedPrompt, "gemini-3.1-pro-preview", "application/json");
       const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
       const parsed = JSON.parse(cleaned);
 
@@ -547,7 +501,7 @@ YOU MUST output a JSON response conforming strictly to this JSON format:
 Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
 `;
 
-  if (ai) {
+  if (aiProvider) {
     const responseText = await callGeminiWithRetry(editingPrompt, "gemini-3.5-flash", "application/json");
     const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
     const parsed = JSON.parse(cleaned);
@@ -604,7 +558,7 @@ YOU MUST output a JSON response conforming strictly to this format:
 Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
 `;
 
-  if (ai) {
+  if (aiProvider) {
     const responseText = await callGeminiWithRetry(auditPrompt, "gemini-3.5-flash", "application/json");
     const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
     const parsed = JSON.parse(cleaned);
@@ -632,7 +586,7 @@ app.post("/api/compile", async (req, res) => {
 
   console.log(`Compiling files for blockchain: ${blockchain}, framework: ${framework}`);
 
-  if (ai) {
+  if (aiProvider) {
     const filesContext = files.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
     const compilerPrompt = `
 You are a highly precise Smart Contract Compiler for "${blockchain}" running inside a professional cloud IDE.
