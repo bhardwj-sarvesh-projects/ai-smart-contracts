@@ -2,9 +2,8 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
-import { GeminiProvider, UsageTracker, AIProvider } from "./server/ai/AIProvider";
+import { AIService } from "./server/services/AIService";
 
 dotenv.config();
 
@@ -47,45 +46,32 @@ function writeDb(data: any) {
   fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
 }
 
-// Initialize centralized AI Provider
-let aiProvider: AIProvider | null = null;
-if (process.env.GEMINI_API_KEY) {
-  try {
-    aiProvider = new GeminiProvider(process.env.GEMINI_API_KEY);
-    console.log("[AI PLATFORM] Centralized AI Provider initialized with Gemini backend");
-  } catch (err) {
-    console.error("[AI PLATFORM] Failed to initialize GeminiProvider", err);
-  }
-} else {
-  console.log("[AI PLATFORM] No GEMINI_API_KEY found in process.env. Centralized Provider initialized as simulated fallback.");
-}
-
-// Backward-compatible wrapper calling into central AI provider
-async function callGeminiWithRetry(
-  prompt: string,
-  modelName: string = "gemini-3.5-flash",
-  responseMimeType: string = "application/json",
-  retries: number = 3,
-  delayMs: number = 1000
-): Promise<string> {
-  if (!aiProvider) {
-    throw new Error("Centralized AI Provider is not initialized. Please configure GEMINI_API_KEY.");
-  }
-
-  const response = await aiProvider.generateContent(prompt, modelName, {
-    responseMimeType: responseMimeType === "application/json" ? "application/json" : undefined
-  });
-
-  return response.text;
-}
-
 // -------------------------------------------------------------
 // API ENDPOINTS
 // -------------------------------------------------------------
 
 // Health Check
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", mode: aiProvider ? "live-gemini" : "simulated" });
+app.get("/api/health", async (req, res) => {
+  try {
+    const result = await AIService.healthCheck();
+    res.json({
+      status: result.success ? "ok" : "error",
+      provider: "openai",
+      model: result.modelUsed,
+      latency: result.latencyMs,
+      success: result.success,
+      error: result.error || null
+    });
+  } catch (err: any) {
+    res.json({
+      status: "error",
+      provider: "openai",
+      model: process.env.AI_MODEL || "gpt-4o",
+      latency: 0,
+      success: false,
+      error: err.message || "Failed health check"
+    });
+  }
 });
 
 // GET all projects
@@ -176,6 +162,8 @@ app.delete("/api/projects/:id", (req, res) => {
 
 // POST /api/generate-plan
 app.post("/api/generate-plan", async (req, res) => {
+  const isDemoMode = req.query.demo === "true" || req.body.demo === true || process.env.DEMO_MODE === "true" || !process.env.OPENAI_API_KEY;
+
   try {
     const { prompt, blockchain, language, framework, contractType } = req.body;
     if (!prompt) {
@@ -217,17 +205,24 @@ Format the output strictly as a JSON object with these keys:
 Do NOT output markdown wrappers, chat explanations, or conversational filler. Return only raw, parsing-valid JSON.
 `;
 
-    if (aiProvider) {
-      const responseText = await callGeminiWithRetry(planPrompt, "gemini-3.1-pro-preview", "application/json");
-      const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
-      const parsed = JSON.parse(cleaned);
+    if (process.env.OPENAI_API_KEY) {
+      const result = await AIService.generatePlan(planPrompt);
       return res.json({
-        ...parsed,
+        ...result.data,
         mode: "live"
       });
     }
 
-    // Default high-fidelity plan template tailored dynamically
+    if (!isDemoMode) {
+      return res.status(500).json({
+        success: false,
+        provider: "openai",
+        error: "OpenAI API key is missing. Please configure OPENAI_API_KEY.",
+        details: "No OPENAI_API_KEY found in process.env"
+      });
+    }
+
+    // Default high-fidelity plan template tailored dynamically for Demo Mode
     const name = prompt.split(" ").slice(0, 3).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ").replace(/[^a-zA-Z0-9 ]/g, "") || "SmartContract";
     const className = name.replace(/\s+/g, "");
 
@@ -245,10 +240,18 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
       deploymentStrategy: `Automated deploy script scripts/deploy.js configuring gas ceilings, initializing state parameters, and verifying code on Explorer.`
     };
 
-    return res.json(simulatedPlan);
-  } catch (err) {
+    return res.json({
+      ...simulatedPlan,
+      mode: "simulated"
+    });
+  } catch (err: any) {
     console.error("Plan endpoint error:", err);
-    res.status(500).json({ error: "Failed to generate plan" });
+    res.status(500).json({
+      success: false,
+      provider: "openai",
+      error: "Failed to generate plan",
+      details: err.message || String(err)
+    });
   }
 });
 
@@ -258,8 +261,10 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
 
 // POST /api/generate
 app.post("/api/generate", async (req, res) => {
+  const isDemoMode = req.query.demo === "true" || req.body.demo === true || process.env.DEMO_MODE === "true" || !process.env.OPENAI_API_KEY;
+
   try {
-    const { prompt, blockchain, language, framework, contractType, provider, model, plan } = req.body;
+    const { prompt, blockchain, language, framework, contractType, plan } = req.body;
 
     if (!prompt) {
       return res.status(400).json({ error: "Prompt is required" });
@@ -348,11 +353,9 @@ YOU MUST output a JSON response conforming strictly to this JSON format:
 Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
 `;
 
-    if (aiProvider) {
-      // Use higher-capacity model for high-fidelity code generation
-      const responseText = await callGeminiWithRetry(extendedPrompt, "gemini-3.1-pro-preview", "application/json");
-      const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
-      const parsed = JSON.parse(cleaned);
+    if (process.env.OPENAI_API_KEY) {
+      const result = await AIService.generateWorkspace(extendedPrompt);
+      const parsed = result.data;
 
       if (parsed && Array.isArray(parsed.files)) {
         console.log(`[AI PLATFORM] Project "${parsed.name}" generated. Initiating Step 6: Internal Validation...`);
@@ -383,9 +386,8 @@ Do NOT output markdown wrappers. Return raw, parsing-valid JSON.
 `;
 
         try {
-          const validatedResponseText = await callGeminiWithRetry(validationPrompt, "gemini-3.5-flash", "application/json");
-          const validatedCleaned = validatedResponseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
-          const validatedParsed = JSON.parse(validatedCleaned);
+          const validatedResult = await AIService.compileAnalysis(validationPrompt);
+          const validatedParsed = validatedResult.data;
           
           if (validatedParsed && Array.isArray(validatedParsed.files)) {
             console.log(`[AI PLATFORM] Step 6 Internal Validation completed successfully.`);
@@ -401,53 +403,39 @@ Do NOT output markdown wrappers. Return raw, parsing-valid JSON.
           mode: "live"
         });
       } else {
-        throw new Error("Invalid response format: files array is missing.");
+        throw new Error("Invalid response format: files array is missing from AI output.");
       }
     }
 
-    // Fallback / Simulated Generation
+    if (!isDemoMode) {
+      return res.status(500).json({
+        success: false,
+        provider: "openai",
+        error: "OpenAI API key is missing. Please configure OPENAI_API_KEY.",
+        details: "No OPENAI_API_KEY found in process.env"
+      });
+    }
+
+    // Fallback / Simulated Generation for Demo Mode
     const simulatedProject = simulateSmartContractGeneration(prompt, blockchain, language, framework, contractType);
     return res.json({
       ...simulatedProject,
       mode: "simulated"
     });
-  } catch (err) {
-    console.error("Critical error in /api/generate, returning hard failsafe fallback", err);
-    
-    // Absolute failsafe contract workspace structure so the request never fails
-    const name = req.body.prompt ? req.body.prompt.split(" ").slice(0, 3).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ").replace(/[^a-zA-Z0-9 ]/g, "") || "SmartContract" : "SmartContract";
-    const className = name.replace(/\s+/g, "");
-    
-    return res.json({
-      name: `${className} Workspace`,
-      description: `Failsafe smart contract workspace generated for: "${req.body.prompt || 'custom contract'}"`,
-      files: [
-        {
-          path: "contracts/Contract.sol",
-          language: "solidity",
-          content: `// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\ncontract ${className} {\n    string public name = "${className}";\n    address public owner;\n\n    constructor() {\n        owner = msg.sender;\n    }\n}`
-        },
-        {
-          path: "README.md",
-          language: "markdown",
-          content: `# ${className} Workspace\n\nFallback workspace created successfully.`
-        }
-      ],
-      audit: {
-        score: 95,
-        codeQuality: 98,
-        gasOptimization: 90,
-        complexity: 1,
-        summary: "Default failsafe workspace generated successfully.",
-        vulnerabilities: []
-      },
-      mode: "simulated"
+  } catch (err: any) {
+    console.error("Critical error in /api/generate:", err);
+    res.status(500).json({
+      success: false,
+      provider: "openai",
+      error: "Failed to generate smart contract workspace",
+      details: err.message || String(err)
     });
   }
 });
 
 // POST /api/edit
 app.post("/api/edit", async (req, res) => {
+  const isDemoMode = req.query.demo === "true" || req.body.demo === true || process.env.DEMO_MODE === "true" || !process.env.OPENAI_API_KEY;
   const { projectId, instruction, files } = req.body;
 
   if (!instruction || !files) {
@@ -501,27 +489,44 @@ YOU MUST output a JSON response conforming strictly to this JSON format:
 Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
 `;
 
-  if (aiProvider) {
-    const responseText = await callGeminiWithRetry(editingPrompt, "gemini-3.5-flash", "application/json");
-    const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
-    const parsed = JSON.parse(cleaned);
+  try {
+    if (process.env.OPENAI_API_KEY) {
+      const result = await AIService.editWorkspace(editingPrompt);
+      return res.json({
+        ...result.data,
+        mode: "live"
+      });
+    }
 
+    if (!isDemoMode) {
+      return res.status(500).json({
+        success: false,
+        provider: "openai",
+        error: "OpenAI API key is missing. Please configure OPENAI_API_KEY.",
+        details: "No OPENAI_API_KEY found in process.env"
+      });
+    }
+
+    // Simulated Edit
+    const simulatedEdit = simulateSmartContractEdit(instruction, files);
     return res.json({
-      ...parsed,
-      mode: "live"
+      ...simulatedEdit,
+      mode: "simulated"
+    });
+  } catch (err: any) {
+    console.error("Critical error in /api/edit:", err);
+    res.status(500).json({
+      success: false,
+      provider: "openai",
+      error: "Failed to edit workspace files",
+      details: err.message || String(err)
     });
   }
-
-  // Simulated Edit
-  const simulatedEdit = simulateSmartContractEdit(instruction, files);
-  res.json({
-    ...simulatedEdit,
-    mode: "simulated"
-  });
 });
 
 // POST /api/audit
 app.post("/api/audit", async (req, res) => {
+  const isDemoMode = req.query.demo === "true" || req.body.demo === true || process.env.DEMO_MODE === "true" || !process.env.OPENAI_API_KEY;
   const { files } = req.body;
 
   if (!files) {
@@ -558,27 +563,44 @@ YOU MUST output a JSON response conforming strictly to this format:
 Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
 `;
 
-  if (aiProvider) {
-    const responseText = await callGeminiWithRetry(auditPrompt, "gemini-3.5-flash", "application/json");
-    const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
-    const parsed = JSON.parse(cleaned);
+  try {
+    if (process.env.OPENAI_API_KEY) {
+      const result = await AIService.auditWorkspace(auditPrompt);
+      return res.json({
+        ...result.data,
+        mode: "live"
+      });
+    }
 
+    if (!isDemoMode) {
+      return res.status(500).json({
+        success: false,
+        provider: "openai",
+        error: "OpenAI API key is missing. Please configure OPENAI_API_KEY.",
+        details: "No OPENAI_API_KEY found in process.env"
+      });
+    }
+
+    // Simulated Audit
+    const simulatedAudit = simulateSmartContractAudit(files);
     return res.json({
-      ...parsed,
-      mode: "live"
+      ...simulatedAudit,
+      mode: "simulated"
+    });
+  } catch (err: any) {
+    console.error("Critical error in /api/audit:", err);
+    res.status(500).json({
+      success: false,
+      provider: "openai",
+      error: "Failed to audit workspace files",
+      details: err.message || String(err)
     });
   }
-
-  // Simulated Audit
-  const simulatedAudit = simulateSmartContractAudit(files);
-  res.json({
-    ...simulatedAudit,
-    mode: "simulated"
-  });
 });
 
 // POST /api/compile
 app.post("/api/compile", async (req, res) => {
+  const isDemoMode = req.query.demo === "true" || req.body.demo === true || process.env.DEMO_MODE === "true" || !process.env.OPENAI_API_KEY;
   const { blockchain, framework, files } = req.body;
   if (!files || files.length === 0) {
     return res.status(400).json({ error: "No files found to compile" });
@@ -586,9 +608,8 @@ app.post("/api/compile", async (req, res) => {
 
   console.log(`Compiling files for blockchain: ${blockchain}, framework: ${framework}`);
 
-  if (aiProvider) {
-    const filesContext = files.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
-    const compilerPrompt = `
+  const filesContext = files.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
+  const compilerPrompt = `
 You are a highly precise Smart Contract Compiler for "${blockchain}" running inside a professional cloud IDE.
 Analyze the following source files and determine if they would compile successfully using standard official toolchains.
 Check for any syntax errors, unresolved imports, unmatched brackets, or undeclared state variables.
@@ -615,22 +636,39 @@ Format the response strictly as a JSON object:
 Do NOT output markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
 `;
 
-    try {
-      const responseText = await callGeminiWithRetry(compilerPrompt, "gemini-3.5-flash", "application/json");
-      const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
-      const parsed = JSON.parse(cleaned);
+  try {
+    if (process.env.OPENAI_API_KEY) {
+      const result = await AIService.compileAnalysis(compilerPrompt);
+      const parsed = result.data;
       return res.json({
         success: parsed.success,
         errors: parsed.errors || [],
         logs: parsed.logs || [],
         timestamp: new Date().toISOString()
       });
-    } catch (err) {
-      console.error("Gemini compiler validation failed, falling back to simulated compiler output:", err);
+    }
+
+    if (!isDemoMode) {
+      return res.status(500).json({
+        success: false,
+        provider: "openai",
+        error: "OpenAI API key is missing. Please configure OPENAI_API_KEY.",
+        details: "No OPENAI_API_KEY found in process.env"
+      });
+    }
+  } catch (err: any) {
+    console.error("OpenAI compiler validation failed:", err);
+    if (!isDemoMode) {
+      return res.status(500).json({
+        success: false,
+        provider: "openai",
+        error: "Failed to compile workspace files via OpenAI validation",
+        details: err.message || String(err)
+      });
     }
   }
 
-  // Generate beautiful simulated compilation logs
+  // Generate beautiful simulated compilation logs for Demo Mode
   const logs: string[] = [];
   logs.push(`[SYSTEM] Starting compilation engine for ${blockchain}...`);
   logs.push(`[SYSTEM] Detected framework: ${framework}`);
