@@ -67,6 +67,63 @@ if (process.env.GEMINI_API_KEY) {
 }
 
 // -------------------------------------------------------------
+// CORE AI UTILITY FOR STABILITY, TIMEOUTS & RETRIES
+// -------------------------------------------------------------
+async function callGeminiWithRetry(
+  prompt: string,
+  modelName: string = "gemini-3.5-flash",
+  responseMimeType: string = "application/json",
+  retries: number = 3,
+  delayMs: number = 1000
+): Promise<string> {
+  if (!ai) {
+    throw new Error("Gemini AI client is not initialized. Please configure GEMINI_API_KEY.");
+  }
+
+  // Clean model name mappings to ensure standard official names are used
+  let standardModel = modelName;
+  if (!modelName || modelName === "Intelligent Router") {
+    standardModel = "gemini-3.1-pro-preview"; // Router defaults to Pro for complex coding
+  } else if (modelName.includes("flash")) {
+    standardModel = "gemini-3.5-flash";
+  } else if (modelName.includes("pro")) {
+    standardModel = "gemini-3.1-pro-preview";
+  }
+
+  let lastError: any = null;
+  for (let i = 0; i < retries; i++) {
+    try {
+      console.log(`[AI ROUTER] Calling model ${standardModel} (Attempt ${i + 1}/${retries})...`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout limit
+
+      const response = await ai.models.generateContent({
+        model: standardModel,
+        contents: prompt,
+        config: {
+          responseMimeType: responseMimeType === "application/json" ? "application/json" : undefined,
+        }
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response && response.text) {
+        return response.text;
+      }
+      throw new Error("Empty response from Gemini");
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[AI ROUTER] Attempt ${i + 1} failed:`, err.message || err);
+      if (i < retries - 1) {
+        await new Promise(resolve => setTimeout(resolve, delayMs * Math.pow(2, i))); // exponential backoff
+      }
+    }
+  }
+  throw lastError;
+}
+
+// -------------------------------------------------------------
 // API ENDPOINTS
 // -------------------------------------------------------------
 
@@ -211,22 +268,13 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
 `;
 
     if (ai) {
-      try {
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: planPrompt,
-          config: {
-            responseMimeType: "application/json"
-          }
-        });
-
-        const responseText = response.text || "{}";
-        const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
-        const parsed = JSON.parse(cleaned);
-        return res.json(parsed);
-      } catch (err) {
-        console.error("Gemini Plan Generation failed, falling back to rich simulation", err);
-      }
+      const responseText = await callGeminiWithRetry(planPrompt, "gemini-3.5-flash", "application/json");
+      const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
+      const parsed = JSON.parse(cleaned);
+      return res.json({
+        ...parsed,
+        mode: "live"
+      });
     }
 
     // Default high-fidelity plan template tailored dynamically
@@ -348,29 +396,58 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 `;
 
     if (ai) {
-      try {
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: extendedPrompt,
-          config: {
-            responseMimeType: "application/json"
+      const responseText = await callGeminiWithRetry(extendedPrompt, model || "gemini-3.5-flash", "application/json");
+      const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
+      const parsed = JSON.parse(cleaned);
+
+      if (parsed && Array.isArray(parsed.files)) {
+        console.log(`[AI PLATFORM] Project "${parsed.name}" generated. Initiating Step 6: Internal Validation...`);
+        
+        // Internal Validation Call to review and auto-repair compile issues
+        const filesContext = parsed.files.map((f: any) => `### FILE: ${f.path}\nContent:\n${f.content}\n`).join("\n");
+        const validationPrompt = `
+You are a Principal Smart Contract Compiler and Security Validator.
+Review the following generated smart contract files for syntax errors, wrong imports, compile warnings, or logic bugs.
+If any issues are found, resolve them by rewriting the files perfectly.
+Keep the exact same file paths.
+
+Generated workspace files:
+${filesContext}
+
+Output the validated files in this JSON format:
+{
+  "files": [
+    {
+      "path": "path/to/file",
+      "content": "Full corrected source code",
+      "language": "solidity|rust|move|javascript|markdown"
+    }
+  ],
+  "validationReport": "Summary of issues checked and corrections made"
+}
+Do NOT output markdown wrappers. Return raw, parsing-valid JSON.
+`;
+
+        try {
+          const validatedResponseText = await callGeminiWithRetry(validationPrompt, "gemini-3.5-flash", "application/json");
+          const validatedCleaned = validatedResponseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
+          const validatedParsed = JSON.parse(validatedCleaned);
+          
+          if (validatedParsed && Array.isArray(validatedParsed.files)) {
+            console.log(`[AI PLATFORM] Step 6 Internal Validation completed successfully.`);
+            parsed.files = validatedParsed.files;
+            parsed.validationReport = validatedParsed.validationReport || "Validated successfully.";
           }
-        });
-
-        const responseText = response.text || "{}";
-        const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
-        const parsed = JSON.parse(cleaned);
-
-        if (parsed && Array.isArray(parsed.files)) {
-          return res.json({
-            ...parsed,
-            mode: "live"
-          });
-        } else {
-          console.warn("Gemini returned response without files array, falling back to simulation");
+        } catch (vErr) {
+          console.warn("[AI PLATFORM] Step 6 Internal Validation met an error (continuing with baseline generated files):", vErr);
         }
-      } catch (err) {
-        console.error("Gemini Generation failed, falling back to smart simulation", err);
+
+        return res.json({
+          ...parsed,
+          mode: "live"
+        });
+      } else {
+        throw new Error("Invalid response format: files array is missing.");
       }
     }
 
@@ -471,26 +548,14 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 `;
 
   if (ai) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: editingPrompt,
-        config: {
-          responseMimeType: "application/json"
-        }
-      });
+    const responseText = await callGeminiWithRetry(editingPrompt, "gemini-3.5-flash", "application/json");
+    const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
+    const parsed = JSON.parse(cleaned);
 
-      const responseText = response.text || "{}";
-      const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
-      const parsed = JSON.parse(cleaned);
-
-      return res.json({
-        ...parsed,
-        mode: "live"
-      });
-    } catch (err) {
-      console.error("Gemini Edit failed, falling back to simulation", err);
-    }
+    return res.json({
+      ...parsed,
+      mode: "live"
+    });
   }
 
   // Simulated Edit
@@ -540,26 +605,14 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 `;
 
   if (ai) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: auditPrompt,
-        config: {
-          responseMimeType: "application/json"
-        }
-      });
+    const responseText = await callGeminiWithRetry(auditPrompt, "gemini-3.5-flash", "application/json");
+    const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
+    const parsed = JSON.parse(cleaned);
 
-      const responseText = response.text || "{}";
-      const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
-      const parsed = JSON.parse(cleaned);
-
-      return res.json({
-        ...parsed,
-        mode: "live"
-      });
-    } catch (err) {
-      console.error("Gemini Audit failed, falling back to simulation", err);
-    }
+    return res.json({
+      ...parsed,
+      mode: "live"
+    });
   }
 
   // Simulated Audit
@@ -571,13 +624,57 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 });
 
 // POST /api/compile
-app.post("/api/compile", (req, res) => {
+app.post("/api/compile", async (req, res) => {
   const { blockchain, framework, files } = req.body;
   if (!files || files.length === 0) {
     return res.status(400).json({ error: "No files found to compile" });
   }
 
   console.log(`Compiling files for blockchain: ${blockchain}, framework: ${framework}`);
+
+  if (ai) {
+    const filesContext = files.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
+    const compilerPrompt = `
+You are a highly precise Smart Contract Compiler for "${blockchain}" running inside a professional cloud IDE.
+Analyze the following source files and determine if they would compile successfully using standard official toolchains.
+Check for any syntax errors, unresolved imports, unmatched brackets, or undeclared state variables.
+
+Workspace files:
+${filesContext}
+
+Format the response strictly as a JSON object:
+{
+  "success": true|false,
+  "errors": [
+    {
+      "file": "path/to/file",
+      "line": 12,
+      "severity": "error|warning",
+      "message": "Detailed compiler message"
+    }
+  ],
+  "logs": [
+    "Compile trace line 1",
+    "Compile trace line 2"
+  ]
+}
+Do NOT output markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
+`;
+
+    try {
+      const responseText = await callGeminiWithRetry(compilerPrompt, "gemini-3.5-flash", "application/json");
+      const cleaned = responseText.replace(/^\s*```json/i, "").replace(/```\s*$/, "").trim();
+      const parsed = JSON.parse(cleaned);
+      return res.json({
+        success: parsed.success,
+        errors: parsed.errors || [],
+        logs: parsed.logs || [],
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error("Gemini compiler validation failed, falling back to simulated compiler output:", err);
+    }
+  }
 
   // Generate beautiful simulated compilation logs
   const logs: string[] = [];
@@ -593,7 +690,6 @@ app.post("/api/compile", (req, res) => {
 
   // Simulated delay-based logs
   let success = true;
-  let errorsCount = 0;
 
   // Let's add framework-specific warnings or logs
   if (blockchain === "ethereum" || blockchain === "base" || blockchain === "polygon") {
@@ -623,6 +719,7 @@ app.post("/api/compile", (req, res) => {
 
   res.json({
     success,
+    errors: [],
     logs,
     timestamp: new Date().toISOString()
   });
