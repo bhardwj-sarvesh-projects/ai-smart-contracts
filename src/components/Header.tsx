@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layers, ShieldCheck, Download, Plus, RefreshCw, FolderOpen, ChevronDown, Check, Library, History, Sun, Moon } from 'lucide-react';
+import { Layers, ShieldCheck, Download, Plus, RefreshCw, FolderOpen, ChevronDown, Check, Library, History, Sun, Moon, Home, Code2, Shield } from 'lucide-react';
 import { Project } from '../types';
 
 interface HeaderProps {
@@ -14,6 +14,8 @@ interface HeaderProps {
   onToggleVersionHistory: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
+  activeTab: 'dashboard' | 'workspace' | 'auditing';
+  onChangeTab: (tab: 'dashboard' | 'workspace' | 'auditing') => void;
 }
 
 export default function Header({
@@ -27,7 +29,9 @@ export default function Header({
   onToggleTemplateLibrary,
   onToggleVersionHistory,
   theme,
-  onToggleTheme
+  onToggleTheme,
+  activeTab,
+  onChangeTab
 }: HeaderProps) {
   const [showProjectsDropdown, setShowProjectsDropdown] = useState(false);
 
@@ -44,6 +48,54 @@ export default function Header({
           <span className={`font-sans font-bold text-sm tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>SmartContract.ai Studio</span>
           <span className={`text-[10px] font-mono tracking-wider uppercase ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>SaaS Copilot v2.0</span>
         </div>
+      </div>
+
+      {/* Central Navigation Tabs */}
+      <div className={`flex items-center gap-1 p-1 rounded-lg border ${
+        theme === 'dark' ? 'bg-slate-900/40 border-slate-800' : 'bg-slate-100 border-slate-200'
+      }`}>
+        <button
+          onClick={() => onChangeTab('dashboard')}
+          id="nav-dashboard"
+          className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            activeTab === 'dashboard'
+              ? theme === 'dark'
+                ? 'bg-slate-850 text-cyan-400 border border-slate-700/60 shadow-inner'
+                : 'bg-white text-slate-900 border border-slate-200 shadow-sm'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Home className="w-3.5 h-3.5" />
+          Dashboard
+        </button>
+        <button
+          onClick={() => onChangeTab('workspace')}
+          id="nav-workspace"
+          className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            activeTab === 'workspace'
+              ? theme === 'dark'
+                ? 'bg-slate-850 text-cyan-400 border border-slate-700/60 shadow-inner'
+                : 'bg-white text-slate-900 border border-slate-200 shadow-sm'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Code2 className="w-3.5 h-3.5" />
+          Workspace
+        </button>
+        <button
+          onClick={() => onChangeTab('auditing')}
+          id="nav-auditing"
+          className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            activeTab === 'auditing'
+              ? theme === 'dark'
+                ? 'bg-slate-850 text-cyan-400 border border-slate-700/60 shadow-inner'
+                : 'bg-white text-slate-900 border border-slate-200 shadow-sm'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Shield className="w-3.5 h-3.5" />
+          Auditing Hub
+        </button>
       </div>
 
       {/* Active Project Selector dropdown */}

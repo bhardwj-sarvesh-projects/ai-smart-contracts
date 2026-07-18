@@ -8,6 +8,8 @@ import TemplateLibrary from './components/TemplateLibrary';
 import ImplementationPlanView from './components/ImplementationPlanView';
 import VersionHistory from './components/VersionHistory';
 import PipelineDashboard from './components/PipelineDashboard';
+import DashboardView from './components/DashboardView';
+import AuditingHub from './components/AuditingHub';
 import { Project, ProjectFile, Vulnerability, Version } from './types';
 import { Layers, Sparkles, RefreshCw, AlertCircle, Library } from 'lucide-react';
 import JSZip from 'jszip';
@@ -17,6 +19,9 @@ export default function App() {
   const [activeProjectId, setActiveProjectId] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+
+  // Active Main Tab/View State
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'workspace' | 'auditing'>('dashboard');
 
   // Advanced toggles
   const [showTemplateLibrary, setShowTemplateLibrary] = useState(false);
@@ -67,6 +72,80 @@ export default function App() {
     setActiveProjectId(id);
     // Reset tabs
     setShowVersionHistory(false);
+  };
+
+  const handleSelectProjectWithTab = (id: string, targetTab?: 'workspace' | 'auditing') => {
+    setActiveProjectId(id);
+    setShowVersionHistory(false);
+    if (targetTab) {
+      setActiveTab(targetTab);
+    }
+  };
+
+  const handleDeleteProject = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this smart contract workspace?")) return;
+    try {
+      const res = await fetch(`/api/projects/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setProjects((prev) => prev.filter((p) => p.id !== id));
+        if (activeProjectId === id) {
+          setActiveProjectId('');
+        }
+      }
+    } catch (err) {
+      console.error("Failed to delete project", err);
+    }
+  };
+
+  const handleAuditProjectDirectly = async (id: string, customFiles?: ProjectFile[]) => {
+    setIsProcessing(true);
+    try {
+      let targetFiles = customFiles;
+      let projectToUpdate = null;
+      
+      if (!targetFiles) {
+        const p = projects.find(item => item.id === id);
+        if (p) {
+          targetFiles = p.files;
+          projectToUpdate = p;
+        }
+      }
+
+      if (!targetFiles || targetFiles.length === 0) {
+        throw new Error("No files found to audit");
+      }
+
+      const response = await fetch('/api/audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: targetFiles })
+      });
+
+      if (response.ok) {
+        const auditData = await response.json();
+        
+        if (projectToUpdate) {
+          const updated = { ...projectToUpdate, audit: auditData };
+          setProjects((prev) =>
+            prev.map((item) => (item.id === id ? updated : item))
+          );
+          
+          await fetch(`/api/projects/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updated)
+          });
+        }
+        return auditData;
+      }
+    } catch (err) {
+      console.error("Failed to execute audit in hub", err);
+    } finally {
+      setIsProcessing(false);
+    }
+    return null;
   };
 
   // Synchronize file edit changes with state & backend
@@ -284,6 +363,7 @@ export default function App() {
 
       setProjects((prev) => [...prev, newProj]);
       setActiveProjectId(newProj.id);
+      setActiveTab('workspace');
     } catch (err) {
       console.error('Failed to generate smart contract project', err);
       
@@ -325,6 +405,7 @@ export default function App() {
 
       setProjects((prev) => [...prev, localFallbackProj]);
       setActiveProjectId(localFallbackProj.id);
+      setActiveTab('workspace');
       alert('AI Generation service failed. Running with simulated fallback creation to ensure your workspace is active.');
     } finally {
       setIsProcessing(false);
@@ -408,6 +489,7 @@ export default function App() {
       const newProj = await createRes.json();
       setProjects((prev) => [...prev, newProj]);
       setActiveProjectId(newProj.id);
+      setActiveTab('workspace');
     } catch (err) {
       console.error('Failed to clone template', err);
       // Fallback
@@ -435,6 +517,7 @@ export default function App() {
       };
       setProjects((prev) => [...prev, fallbackProj]);
       setActiveProjectId(fallbackProj.id);
+      setActiveTab('workspace');
     } finally {
       setIsProcessing(false);
     }
@@ -641,109 +724,137 @@ export default function App() {
         onToggleVersionHistory={() => setShowVersionHistory(!showVersionHistory)}
         theme={theme}
         onToggleTheme={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
+        activeTab={activeTab}
+        onChangeTab={setActiveTab}
       />
 
-      {/* Main Workspace Frame */}
-      {activeProject ? (
-        <div className="flex-1 flex min-h-0 relative">
-          
-          {/* Left Sidebar (File Explorer / Version History Switcher) */}
-          <div className={`w-64 flex-shrink-0 border-r flex flex-col min-h-0 ${theme === 'dark' ? 'border-slate-800 bg-slate-950' : 'border-slate-200 bg-white'}`}>
-            {showVersionHistory ? (
-              <VersionHistory
-                versions={activeProject.versions || []}
-                onRestore={handleRestoreVersion}
-                onDuplicate={handleDuplicateVersion}
-                onRenamePrompt={handleRenameVersionPrompt}
-                onDeleteVersion={handleDeleteVersion}
-              />
-            ) : (
-              <FileTree
-                files={activeProject.files}
-                activeFilePath={activeProject.activeFilePath}
-                onSelectFile={handleSelectFile}
-                onAddFile={handleAddFile}
-                onDeleteFile={handleDeleteFile}
-              />
-            )}
-          </div>
-
-          {/* Central Workspace (Editor + Pipeline Assembly Controller) */}
-          <div className="flex-1 flex flex-col min-w-0">
-            {/* Upper Editor Workspace */}
-            <div className="flex-1 min-h-0">
-              <CodeWorkspace
-                files={activeProject.files}
-                activeFilePath={activeProject.activeFilePath}
-                onFileContentChange={handleFileContentChange}
-                onSelectFile={handleSelectFile}
-              />
-            </div>
-
-            {/* Advanced 10-stage deployment compiler pipeline replacement */}
-            <div className="h-72 flex-shrink-0">
-              <PipelineDashboard
-                project={activeProject}
-                onUpdateFiles={(newFiles) => {
-                  const updated = { ...activeProject, files: newFiles };
-                  setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
-                  fetch(`/api/projects/${activeProject.id}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(updated)
-                  });
-                }}
-                onCompile={handleCompile}
-                onDeploy={handleDeploy}
-                isCompiling={isCompiling}
-                isDeploying={isDeploying}
-              />
-            </div>
-          </div>
-
-          {/* Right Assistant (Copilot refactoring + Security Auditor panel) */}
-          <div className="w-80 flex-shrink-0">
-            <RightAssistant
-              auditResult={activeProject.audit}
-              files={activeProject.files}
-              onApplyAIFix={handleApplyAIFix}
-              onEditContract={handleEditContract}
-              isProcessing={isProcessing}
-              activeProvider={activeProvider}
-              setActiveProvider={setActiveProvider}
-              activeModel={activeModel}
-              setActiveModel={setActiveModel}
-            />
-          </div>
-        </div>
+      {/* Active Tab Router */}
+      {activeTab === 'dashboard' ? (
+        <DashboardView
+          projects={projects}
+          theme={theme}
+          onSelectProject={handleSelectProjectWithTab}
+          onNewProjectClick={() => setShowNewProjectModal(true)}
+          onDeleteProject={handleDeleteProject}
+        />
+      ) : activeTab === 'auditing' ? (
+        <AuditingHub
+          projects={projects}
+          activeProject={activeProject}
+          onSelectProject={handleSelectProject}
+          onAuditProject={handleAuditProjectDirectly}
+          onApplyFixToProject={async (projectId, vuln) => {
+            if (activeProjectId !== projectId) {
+              setActiveProjectId(projectId);
+            }
+            await handleApplyAIFix(vuln);
+          }}
+          theme={theme}
+          isProcessing={isProcessing}
+        />
       ) : (
-        /* Empty Dashboard Splash Screen */
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500 to-indigo-600 shadow-xl animate-bounce">
-            <Layers className="w-7 h-7 text-white" />
+        /* Workspace View (with fallback empty splash state) */
+        activeProject ? (
+          <div className="flex-1 flex min-h-0 relative">
+            
+            {/* Left Sidebar (File Explorer / Version History Switcher) */}
+            <div className={`w-64 flex-shrink-0 border-r flex flex-col min-h-0 ${theme === 'dark' ? 'border-slate-800 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+              {showVersionHistory ? (
+                <VersionHistory
+                  versions={activeProject.versions || []}
+                  onRestore={handleRestoreVersion}
+                  onDuplicate={handleDuplicateVersion}
+                  onRenamePrompt={handleRenameVersionPrompt}
+                  onDeleteVersion={handleDeleteVersion}
+                />
+              ) : (
+                <FileTree
+                  files={activeProject.files}
+                  activeFilePath={activeProject.activeFilePath}
+                  onSelectFile={handleSelectFile}
+                  onAddFile={handleAddFile}
+                  onDeleteFile={handleDeleteFile}
+                />
+              )}
+            </div>
+
+            {/* Central Workspace (Editor + Pipeline Assembly Controller) */}
+            <div className="flex-1 flex flex-col min-w-0">
+              {/* Upper Editor Workspace */}
+              <div className="flex-1 min-h-0">
+                <CodeWorkspace
+                  files={activeProject.files}
+                  activeFilePath={activeProject.activeFilePath}
+                  onFileContentChange={handleFileContentChange}
+                  onSelectFile={handleSelectFile}
+                />
+              </div>
+
+              {/* Advanced 10-stage deployment compiler pipeline replacement */}
+              <div className="h-72 flex-shrink-0">
+                <PipelineDashboard
+                  project={activeProject}
+                  onUpdateFiles={(newFiles) => {
+                    const updated = { ...activeProject, files: newFiles };
+                    setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
+                    fetch(`/api/projects/${activeProject.id}`, {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(updated)
+                    });
+                  }}
+                  onCompile={handleCompile}
+                  onDeploy={handleDeploy}
+                  isCompiling={isCompiling}
+                  isDeploying={isDeploying}
+                />
+              </div>
+            </div>
+
+            {/* Right Assistant (Copilot refactoring + Security Auditor panel) */}
+            <div className="w-80 flex-shrink-0">
+              <RightAssistant
+                auditResult={activeProject.audit}
+                files={activeProject.files}
+                onApplyAIFix={handleApplyAIFix}
+                onEditContract={handleEditContract}
+                isProcessing={isProcessing}
+                activeProvider={activeProvider}
+                setActiveProvider={setActiveProvider}
+                activeModel={activeModel}
+                setActiveModel={setActiveModel}
+              />
+            </div>
           </div>
-          <div className="space-y-1.5 max-w-md">
-            <h2 className="text-lg font-bold uppercase tracking-wider">SmartContract.ai Studio</h2>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Design, generate, audit, compile, and deploy enterprise smart contracts using natural language. 
-              Supports Solidity, Rust, Move, Tact, Vyper, and Seahorse.
-            </p>
+        ) : (
+          /* Empty Workspace Splash Screen */
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500 to-indigo-600 shadow-xl animate-bounce">
+              <Layers className="w-7 h-7 text-white" />
+            </div>
+            <div className="space-y-1.5 max-w-md">
+              <h2 className="text-lg font-bold uppercase tracking-wider">SmartContract.ai Studio</h2>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Design, generate, audit, compile, and deploy enterprise smart contracts using natural language. 
+                Supports Solidity, Rust, Move, Tact, Vyper, and Seahorse.
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowNewProjectModal(true)}
+                className="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-md transition-colors"
+              >
+                Create Workspace Project
+              </button>
+              <button
+                onClick={() => setShowTemplateLibrary(true)}
+                className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-md transition-colors"
+              >
+                <Library className="w-4 h-4" /> Template Library
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowNewProjectModal(true)}
-              className="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-md transition-colors"
-            >
-              Create Workspace Project
-            </button>
-            <button
-              onClick={() => setShowTemplateLibrary(true)}
-              className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-md transition-colors"
-            >
-              <Library className="w-4 h-4" /> Template Library
-            </button>
-          </div>
-        </div>
+        )
       )}
 
       {/* New Project Selector Modal */}
