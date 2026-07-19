@@ -10,7 +10,7 @@ export const AI_CONFIG = {
   timeout: 60000,
 
   openai: {
-    apiKey: "PASTE_NEW_OPENAI_KEY_HERE",
+    apiKey: "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",
     model: "gpt-5-mini",
   },
 
