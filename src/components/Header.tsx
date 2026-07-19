@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Layers, ShieldCheck, Download, Plus, RefreshCw, FolderOpen, ChevronDown, Check, Library, History, Sun, Moon, Home, Code2, Shield } from 'lucide-react';
+import { Layers, ShieldCheck, Download, Plus, RefreshCw, FolderOpen, ChevronDown, Check, Library, History, Sun, Moon, Home, Code2, Shield, Sliders } from 'lucide-react';
 import { Project } from '../types';
+import { AppUser } from '../lib/firebase';
 
 interface HeaderProps {
   projects: Project[];
@@ -16,6 +17,10 @@ interface HeaderProps {
   onToggleTheme: () => void;
   activeTab: 'dashboard' | 'workspace' | 'auditing';
   onChangeTab: (tab: 'dashboard' | 'workspace' | 'auditing') => void;
+  currentUser: AppUser;
+  activeProvider: string;
+  onOpenSettings: () => void;
+  onLogout: () => void;
 }
 
 export default function Header({
@@ -31,7 +36,11 @@ export default function Header({
   theme,
   onToggleTheme,
   activeTab,
-  onChangeTab
+  onChangeTab,
+  currentUser,
+  activeProvider,
+  onOpenSettings,
+  onLogout
 }: HeaderProps) {
   const [showProjectsDropdown, setShowProjectsDropdown] = useState(false);
 
@@ -254,6 +263,48 @@ export default function Header({
             </button>
           </>
         )}
+
+        {/* Dynamic AI Provider Status Badge */}
+        <span className={`hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-semibold tracking-wide uppercase ${
+          theme === 'dark' ? 'bg-indigo-500/5 border-indigo-500/20 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-600'
+        }`}>
+          <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+          AI: {activeProvider}
+        </span>
+
+        {/* Orchestrator Settings Trigger */}
+        <button
+          onClick={onOpenSettings}
+          className={`p-1.5 rounded border transition-colors hover:text-cyan-400 ${
+            theme === 'dark' ? 'border-slate-800 bg-slate-900/40 text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-500'
+          }`}
+          title="AI Orchestrator settings"
+        >
+          <Sliders className="w-4 h-4" />
+        </button>
+
+        {/* User Session Profile & Secure Logout */}
+        <div className="flex items-center gap-2 pl-2 border-l border-slate-800/80">
+          {currentUser?.photoURL ? (
+            <img 
+              src={currentUser.photoURL} 
+              alt={currentUser.displayName} 
+              className="w-6 h-6 rounded-full border border-slate-700/80 object-cover shrink-0" 
+              referrerPolicy="no-referrer" 
+            />
+          ) : (
+            <div className="w-6 h-6 rounded-full bg-slate-800 border border-slate-700/80 flex items-center justify-center text-[10px] font-bold text-slate-300 shrink-0">
+              {currentUser?.displayName?.[0]?.toUpperCase() || 'U'}
+            </div>
+          )}
+          <button
+            onClick={onLogout}
+            className="text-[10px] uppercase font-bold text-slate-500 hover:text-rose-400 transition"
+            title="Secure logout session"
+          >
+            Logout
+          </button>
+        </div>
       </div>
     </header>
   );

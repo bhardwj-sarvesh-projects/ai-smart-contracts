@@ -13,6 +13,9 @@ import AuditingHub from './components/AuditingHub';
 import { Project, ProjectFile, Vulnerability, Version } from './types';
 import { Layers, Sparkles, RefreshCw, AlertCircle, Library } from 'lucide-react';
 import JSZip from 'jszip';
+import { AuthService, AppUser } from './lib/firebase';
+import AuthView from './components/AuthView';
+import SettingsModal from './components/SettingsModal';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -38,18 +41,72 @@ export default function App() {
   const [deploymentLogs, setDeploymentLogs] = useState<string[]>([]);
   const [isDeploying, setIsDeploying] = useState(false);
 
+  // Authentication & Settings States
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+
   // Active AI Provider config
   const [activeProvider, setActiveProvider] = useState('auto');
   const [activeModel, setActiveModel] = useState('Intelligent Router');
 
-  // Load projects on mount
+  // Authed Fetch Helper
+  const authedFetch = async (url: string, options: RequestInit = {}) => {
+    const user = currentUser || AuthService.getCurrentUser();
+    const headers = {
+      ...(options.headers || {}),
+    } as Record<string, string>;
+
+    if (user) {
+      headers['x-user-id'] = user.uid;
+      headers['x-user-email'] = user.email;
+      headers['x-user-name'] = user.displayName;
+      headers['x-user-photo'] = user.photoURL;
+    }
+
+    if (options.body && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    return fetch(url, {
+      ...options,
+      headers,
+    });
+  };
+
+  // User Session sync
   useEffect(() => {
-    fetchProjects();
+    const unsubscribe = AuthService.onUserChange((user) => {
+      setCurrentUser(user);
+    });
+    return unsubscribe;
   }, []);
+
+  // Load projects and settings when user changes
+  useEffect(() => {
+    if (currentUser) {
+      fetchProjects();
+      loadUserSettings();
+    } else {
+      setProjects([]);
+    }
+  }, [currentUser]);
+
+  const loadUserSettings = async () => {
+    try {
+      const res = await authedFetch('/api/settings');
+      if (res.ok) {
+        const data = await res.json();
+        setActiveProvider(data.provider || 'openai');
+        setActiveModel(data.defaultModel || 'Intelligent Router');
+      }
+    } catch (err) {
+      console.error('Failed to load user settings', err);
+    }
+  };
 
   const fetchProjects = async () => {
     try {
-      const res = await fetch('/api/projects');
+      const res = await authedFetch('/api/projects');
       if (res.ok) {
         const data = await res.json();
         setProjects(data);
@@ -85,7 +142,7 @@ export default function App() {
   const handleDeleteProject = async (id: string) => {
     if (!window.confirm("Are you sure you want to delete this smart contract workspace?")) return;
     try {
-      const res = await fetch(`/api/projects/${id}`, {
+      const res = await authedFetch(`/api/projects/${id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -117,7 +174,7 @@ export default function App() {
         throw new Error("No files found to audit");
       }
 
-      const response = await fetch('/api/audit', {
+      const response = await authedFetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ files: targetFiles })
@@ -132,7 +189,7 @@ export default function App() {
             prev.map((item) => (item.id === id ? updated : item))
           );
           
-          await fetch(`/api/projects/${id}`, {
+          await authedFetch(`/api/projects/${id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updated)
@@ -166,7 +223,7 @@ export default function App() {
     );
 
     try {
-      await fetch(`/api/projects/${activeProject.id}`, {
+      await authedFetch(`/api/projects/${activeProject.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedProject)
@@ -185,7 +242,7 @@ export default function App() {
     );
 
     try {
-      await fetch(`/api/projects/${activeProject.id}`, {
+      await authedFetch(`/api/projects/${activeProject.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
@@ -223,7 +280,7 @@ export default function App() {
     );
 
     try {
-      await fetch(`/api/projects/${activeProject.id}`, {
+      await authedFetch(`/api/projects/${activeProject.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
@@ -250,7 +307,7 @@ export default function App() {
     );
 
     try {
-      await fetch(`/api/projects/${activeProject.id}`, {
+      await authedFetch(`/api/projects/${activeProject.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
@@ -274,7 +331,7 @@ export default function App() {
     setShowNewProjectModal(false);
 
     try {
-      const response = await fetch('/api/generate-plan', {
+      const response = await authedFetch('/api/generate-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -311,7 +368,7 @@ export default function App() {
     if (!config) return;
 
     try {
-      const response = await fetch('/api/generate', {
+      const response = await authedFetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -333,7 +390,7 @@ export default function App() {
 
       const aiGenerated = await response.json();
 
-      const createRes = await fetch('/api/projects', {
+      const createRes = await authedFetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -355,7 +412,7 @@ export default function App() {
       
       if (aiGenerated.audit) {
         const auditedProj = { ...newProj, audit: aiGenerated.audit };
-        await fetch(`/api/projects/${newProj.id}`, {
+        await authedFetch(`/api/projects/${newProj.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(auditedProj)
@@ -381,7 +438,7 @@ export default function App() {
     setIsProcessing(true);
 
     try {
-      const response = await fetch('/api/edit', {
+      const response = await authedFetch('/api/edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -414,7 +471,7 @@ export default function App() {
         prev.map((p) => (p.id === activeProject.id ? updatedProject : p))
       );
 
-      await fetch(`/api/projects/${activeProject.id}`, {
+      await authedFetch(`/api/projects/${activeProject.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedProject)
@@ -432,7 +489,7 @@ export default function App() {
     setShowTemplateLibrary(false);
 
     try {
-      const createRes = await fetch('/api/projects', {
+      const createRes = await authedFetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -471,7 +528,7 @@ export default function App() {
       files: version.files
     };
     setProjects((prev) => prev.map(p => p.id === activeProject.id ? updated : p));
-    await fetch(`/api/projects/${activeProject.id}`, {
+    await authedFetch(`/api/projects/${activeProject.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updated)
@@ -482,7 +539,7 @@ export default function App() {
     if (!activeProject) return;
     setIsProcessing(true);
     try {
-      const createRes = await fetch('/api/projects', {
+      const createRes = await authedFetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -514,7 +571,7 @@ export default function App() {
     );
     const updated = { ...activeProject, versions: updatedVersions };
     setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
-    await fetch(`/api/projects/${activeProject.id}`, {
+    await authedFetch(`/api/projects/${activeProject.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updated)
@@ -526,7 +583,7 @@ export default function App() {
     const updatedVersions = (activeProject.versions || []).filter(v => v.id !== versionId);
     const updated = { ...activeProject, versions: updatedVersions };
     setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
-    await fetch(`/api/projects/${activeProject.id}`, {
+    await authedFetch(`/api/projects/${activeProject.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updated)
@@ -543,7 +600,7 @@ export default function App() {
     setIsProcessing(true);
 
     try {
-      const response = await fetch('/api/audit', {
+      const response = await authedFetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ files: activeProject.files })
@@ -557,7 +614,7 @@ export default function App() {
           prev.map((p) => (p.id === activeProject.id ? updated : p))
         );
 
-        await fetch(`/api/projects/${activeProject.id}`, {
+        await authedFetch(`/api/projects/${activeProject.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updated)
@@ -577,7 +634,7 @@ export default function App() {
     setCompilerLogs(['[SYSTEM] Initializing compilation run...']);
 
     try {
-      const res = await fetch('/api/compile', {
+      const res = await authedFetch('/api/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -606,7 +663,7 @@ export default function App() {
     setDeploymentLogs(['[DEPLOYER] Orchestrating build target for sandbox network...']);
 
     try {
-      const res = await fetch('/api/deploy', {
+      const res = await authedFetch('/api/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -646,6 +703,10 @@ export default function App() {
     });
   };
 
+  if (!currentUser) {
+    return <AuthView onLoginSuccess={(user) => setCurrentUser(user)} />;
+  }
+
   return (
     <div className={`flex flex-col h-screen w-screen overflow-hidden font-sans transition-colors ${
       theme === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-800'
@@ -666,6 +727,13 @@ export default function App() {
         onToggleTheme={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
         activeTab={activeTab}
         onChangeTab={setActiveTab}
+        currentUser={currentUser}
+        activeProvider={activeProvider}
+        onOpenSettings={() => setShowSettingsModal(true)}
+        onLogout={async () => {
+          await AuthService.logout();
+          setCurrentUser(null);
+        }}
       />
 
       {/* Active Tab Router */}
@@ -737,7 +805,7 @@ export default function App() {
                   onUpdateFiles={(newFiles) => {
                     const updated = { ...activeProject, files: newFiles };
                     setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
-                    fetch(`/api/projects/${activeProject.id}`, {
+                    authedFetch(`/api/projects/${activeProject.id}`, {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(updated)
@@ -824,6 +892,19 @@ export default function App() {
             setPendingConfig(null);
           }}
           onApprove={(approvedPlan) => handleApproveAndGeneratePlan(approvedPlan, null)}
+        />
+      )}
+
+      {/* Orchestrator Settings Modal */}
+      {showSettingsModal && (
+        <SettingsModal
+          isOpen={showSettingsModal}
+          onClose={() => setShowSettingsModal(false)}
+          currentUser={currentUser}
+          onSettingsSaved={(prov, mod) => {
+            setActiveProvider(prov);
+            setActiveModel(mod);
+          }}
         />
       )}
     </div>

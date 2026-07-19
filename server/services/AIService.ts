@@ -1,15 +1,15 @@
-import { OpenAIProvider, AIResponse } from "../providers/OpenAIProvider";
+import { ProviderFactory } from "../providers/ProviderFactory";
+import { AIProvider, AIResponse, HealthResponse } from "../providers/AIProvider";
+import { UserConfig } from "./SettingsService";
 
 export class AIService {
-  private static provider = new OpenAIProvider();
-
   // Centralized logging and statistics tracking
-  private static logRequest(action: string, response: AIResponse, startTime: number) {
+  private static logRequest(provider: AIProvider, action: string, response: AIResponse, startTime: number) {
     const endTime = Date.now();
     const duration = endTime - startTime;
     console.log(`[AI SERVICE LOG] --------------------------------------------------`);
     console.log(`[AI SERVICE LOG] Action: ${action}`);
-    console.log(`[AI SERVICE LOG] Provider: ${this.provider.name}`);
+    console.log(`[AI SERVICE LOG] Provider: ${provider.name}`);
     console.log(`[AI SERVICE LOG] Model: ${response.model}`);
     console.log(`[AI SERVICE LOG] Duration: ${duration}ms`);
     if (response.usage) {
@@ -20,6 +20,7 @@ export class AIService {
 
   // Centralized JSON validation with self-healing automatic retries
   private static async executeWithJsonValidation(
+    provider: AIProvider,
     action: string,
     executeFn: () => Promise<AIResponse>,
     maxRetries: number = 2
@@ -30,7 +31,7 @@ export class AIService {
       const startTime = Date.now();
       try {
         const response = await executeFn();
-        this.logRequest(action, response, startTime);
+        this.logRequest(provider, action, response, startTime);
 
         const cleaned = response.text
           .replace(/^\s*```json/i, "")
@@ -47,7 +48,7 @@ export class AIService {
           };
         } catch (parseErr) {
           console.warn(`[AI SERVICE] JSON parse failed on attempt ${attempt}/${maxRetries}. Response raw was:`, response.text);
-          throw new Error(`OpenAI response was not valid JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
+          throw new Error(`AI response was not valid JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
         }
       } catch (err: any) {
         lastError = err;
@@ -58,45 +59,48 @@ export class AIService {
     throw lastError;
   }
 
-  static async generatePlan(prompt: string, systemInstruction?: string): Promise<any> {
-    return this.executeWithJsonValidation("Generate Plan", () =>
-      this.provider.plan(prompt, systemInstruction)
+  static async generatePlan(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {
+    const provider = ProviderFactory.getProvider(settings);
+    return this.executeWithJsonValidation(provider, "Generate Plan", () =>
+      provider.plan(prompt, systemInstruction)
     );
   }
 
-  static async generateWorkspace(prompt: string, systemInstruction?: string): Promise<any> {
-    return this.executeWithJsonValidation("Generate Workspace", () =>
-      this.provider.generate(prompt, systemInstruction, "application/json")
+  static async generateWorkspace(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {
+    const provider = ProviderFactory.getProvider(settings);
+    return this.executeWithJsonValidation(provider, "Generate Workspace", () =>
+      provider.generate(prompt, systemInstruction, "application/json")
     );
   }
 
-  static async editWorkspace(prompt: string, systemInstruction?: string): Promise<any> {
-    return this.executeWithJsonValidation("Edit Workspace", () =>
-      this.provider.edit(prompt, systemInstruction)
+  static async editWorkspace(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {
+    const provider = ProviderFactory.getProvider(settings);
+    return this.executeWithJsonValidation(provider, "Edit Workspace", () =>
+      provider.edit(prompt, systemInstruction)
     );
   }
 
-  static async auditWorkspace(prompt: string, systemInstruction?: string): Promise<any> {
-    return this.executeWithJsonValidation("Audit Workspace", () =>
-      this.provider.audit(prompt, systemInstruction)
+  static async auditWorkspace(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {
+    const provider = ProviderFactory.getProvider(settings);
+    return this.executeWithJsonValidation(provider, "Audit Workspace", () =>
+      provider.audit(prompt, systemInstruction)
     );
   }
 
-  static async compileAnalysis(prompt: string, systemInstruction?: string): Promise<any> {
-    return this.executeWithJsonValidation("Compile Analysis", () =>
-      this.provider.compileAnalysis(prompt, systemInstruction)
+  static async compileAnalysis(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {
+    const provider = ProviderFactory.getProvider(settings);
+    return this.executeWithJsonValidation(provider, "Compile Analysis", () =>
+      provider.compileAnalysis(prompt, systemInstruction)
     );
   }
 
-  static async healthCheck() {
-    return this.provider.healthCheck();
+  static async healthCheck(settings: UserConfig): Promise<HealthResponse> {
+    const provider = ProviderFactory.getProvider(settings);
+    return provider.healthCheck();
   }
 
-  static async testOpenAI() {
-    return this.provider.testOpenAI();
-  }
-
-  static getProviderName(): string {
-    return this.provider.name;
+  static async testConnection(settings: UserConfig): Promise<any> {
+    const provider = ProviderFactory.getProvider(settings);
+    return provider.testConnection();
   }
 }

@@ -1,23 +1,26 @@
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 import { AIProvider, AIResponse, HealthResponse } from "./AIProvider";
 
-export class GroqProvider implements AIProvider {
-  readonly name = "groq";
-  private client: OpenAI;
+export class GeminiProvider implements AIProvider {
+  readonly name = "gemini";
+  private ai: GoogleGenAI;
   private model: string;
   private temperature: number;
   private maxTokens: number;
 
   constructor(config: { apiKey: string; model?: string; temperature?: number; maxTokens?: number }) {
-    this.client = new OpenAI({
+    this.ai = new GoogleGenAI({
       apiKey: config.apiKey,
-      baseURL: "https://api.groq.com/openai/v1",
-      timeout: 60000,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
     });
-    this.model = config.model || "llama-3.3-70b-versatile";
+    this.model = config.model || "gemini-3.5-flash";
     this.temperature = typeof config.temperature === "number" ? config.temperature : 0.2;
     this.maxTokens = typeof config.maxTokens === "number" ? config.maxTokens : 2000;
-    console.log(`[GROQ PROVIDER] Initialized dynamically with model: ${this.model}`);
+    console.log(`[GEMINI PROVIDER] Initialized dynamically with model: ${this.model}`);
   }
 
   private async executeWithRetry(
@@ -34,29 +37,30 @@ export class GroqProvider implements AIProvider {
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         console.log("--------------------------------");
-        console.log("GROQ REQUEST");
+        console.log("GEMINI REQUEST");
         console.log(`Model: ${this.model}`);
         console.log(`Route: ${route}`);
         console.log(`Prompt Length: ${prompt.length + (systemInstruction ? systemInstruction.length : 0)}`);
         console.log("--------------------------------");
 
-        const response = await this.client.chat.completions.create({
+        const response = await this.ai.models.generateContent({
           model: this.model,
-          messages: [
-            ...(systemInstruction ? [{ role: "system" as const, content: systemInstruction }] : []),
-            { role: "user" as const, content: prompt }
-          ],
-          response_format: responseMimeType === "application/json" ? { type: "json_object" } : undefined,
-          temperature: this.temperature,
-          max_tokens: this.maxTokens,
+          contents: prompt,
+          config: {
+            systemInstruction: systemInstruction || undefined,
+            temperature: this.temperature,
+            maxOutputTokens: this.maxTokens,
+            responseMimeType: responseMimeType === "application/json" ? "application/json" : undefined,
+          },
         });
 
-        const text = response.choices[0]?.message?.content || "";
+        const text = response.text || "";
         const durationMs = Date.now() - startTime;
 
-        const promptTokens = response.usage?.prompt_tokens ?? 0;
-        const completionTokens = response.usage?.completion_tokens ?? 0;
-        const totalTokens = response.usage?.total_tokens ?? 0;
+        // Note: usage metadata may be present on the response metadata or response.usageMetadata
+        const promptTokens = (response as any).usageMetadata?.promptTokenCount ?? 0;
+        const completionTokens = (response as any).usageMetadata?.candidatesTokenCount ?? 0;
+        const totalTokens = (response as any).usageMetadata?.totalTokenCount ?? 0;
 
         console.log(`Prompt Tokens: ${promptTokens}`);
         console.log(`Completion Tokens: ${completionTokens}`);
@@ -67,24 +71,22 @@ export class GroqProvider implements AIProvider {
           text,
           model: this.model,
           durationMs,
-          usage: response.usage ? {
+          usage: {
             promptTokens,
             completionTokens,
-            totalTokens
-          } : undefined
+            totalTokens,
+          },
         };
       } catch (err: any) {
         lastError = err;
 
         console.error("--------------------------------");
-        console.error("GROQ FAILURE DETAILS");
-        console.error("Full Groq error:", err);
-        console.error("HTTP status:", err.status || "N/A");
-        console.error("Error code:", err.code || "N/A");
+        console.error("GEMINI FAILURE DETAILS");
+        console.error("Full Gemini error:", err);
         console.error("Stack trace:", err.stack || "N/A");
         console.error("--------------------------------");
 
-        console.warn(`[GROQ PROVIDER] Attempt ${attempt} failed:`, err.message || err);
+        console.warn(`[GEMINI PROVIDER] Attempt ${attempt} failed:`, err.message || err);
         if (attempt < retries) {
           const delay = baseDelayMs * Math.pow(2, attempt - 1);
           await new Promise((resolve) => setTimeout(resolve, delay));
@@ -118,22 +120,24 @@ export class GroqProvider implements AIProvider {
   async healthCheck(): Promise<HealthResponse> {
     const startTime = Date.now();
     try {
-      await this.client.chat.completions.create({
+      await this.ai.models.generateContent({
         model: this.model,
-        messages: [{ role: "user" as const, content: "ping" }],
-        max_tokens: 5
+        contents: "ping",
+        config: {
+          maxOutputTokens: 5,
+        },
       });
       return {
         success: true,
         latencyMs: Date.now() - startTime,
-        modelUsed: this.model
+        modelUsed: this.model,
       };
     } catch (err: any) {
       return {
         success: false,
         latencyMs: Date.now() - startTime,
         modelUsed: this.model,
-        error: err.message || "Failed to call Groq completions."
+        error: err.message || "Failed to call generateContent on Gemini.",
       };
     }
   }

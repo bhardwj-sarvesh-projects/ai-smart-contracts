@@ -4,7 +4,9 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { AIService } from "./server/services/AIService";
-import { OPENAI_MODEL } from "./server/config/ai";
+import { OPENAI_MODEL, AI_CONFIG } from "./server/config/ai";
+import { SettingsService, UserConfig } from "./server/services/SettingsService";
+import settingsRouter from "./server/routes/settings";
 
 dotenv.config();
 
@@ -12,6 +14,52 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
+
+// Helper to resolve active user AI configuration or use central fallback
+function getActiveUserConfig(req: express.Request): UserConfig {
+  const userId = req.headers["x-user-id"] as string;
+  const email = req.headers["x-user-email"] as string;
+  const displayName = req.headers["x-user-name"] as string;
+  const photo = req.headers["x-user-photo"] as string;
+
+  let userConfig = userId ? SettingsService.getDecrypted(userId) : null;
+
+  if (!userConfig) {
+    const activeProvider = AI_CONFIG.provider || "openai";
+    let activeKey = "";
+    let activeModel = "";
+
+    if (activeProvider === "openai") {
+      activeKey = AI_CONFIG.openai.apiKey;
+      activeModel = AI_CONFIG.openai.model;
+    } else if (activeProvider === "groq") {
+      activeKey = AI_CONFIG.groq.apiKey;
+      activeModel = AI_CONFIG.groq.model;
+    } else if (activeProvider === "gemini") {
+      activeKey = AI_CONFIG.gemini.apiKey;
+      activeModel = AI_CONFIG.gemini.model || "gemini-3.5-flash";
+    }
+
+    userConfig = {
+      userId: userId || "default",
+      email: email || "default@smartcontract.ai",
+      displayName: displayName || "Default User",
+      photo: photo || "",
+      provider: activeProvider,
+      apiKey: activeKey,
+      defaultModel: activeModel,
+      temperature: 0.2,
+      maxTokens: 2000,
+      createdDate: new Date().toISOString(),
+      updatedDate: new Date().toISOString(),
+    };
+  }
+  return userConfig;
+}
+
+// Mount AI Settings Router
+app.use("/api/settings", settingsRouter);
+
 
 // Helper to access DB path
 const DB_PATH = path.join(process.cwd(), "data", "db.json");
@@ -54,18 +102,19 @@ function writeDb(data: any) {
 // Health Check
 app.get("/api/health", async (req, res) => {
   try {
-    const result = await AIService.healthCheck();
+    const userConfig = getActiveUserConfig(req);
+    const result = await AIService.healthCheck(userConfig);
     if (result.success) {
       return res.json({
-        provider: "openai",
-        model: OPENAI_MODEL,
+        provider: userConfig.provider,
+        model: result.modelUsed,
         connected: true,
         success: true
       });
     } else {
       return res.json({
         connected: false,
-        error: result.error || "Failed to connect to OpenAI service"
+        error: result.error || `Failed to connect to ${userConfig.provider} service`
       });
     }
   } catch (err: any) {
@@ -79,7 +128,8 @@ app.get("/api/health", async (req, res) => {
 // Test OpenAI Route
 app.get("/api/test-openai", async (req, res) => {
   try {
-    const rawResponse = await AIService.testOpenAI();
+    const userConfig = getActiveUserConfig(req);
+    const rawResponse = await AIService.testConnection(userConfig);
     return res.json({
       success: true,
       response: rawResponse
@@ -222,7 +272,8 @@ Format the output strictly as a JSON object with these keys:
 Do NOT output markdown wrappers, chat explanations, or conversational filler. Return only raw, parsing-valid JSON.
 `;
 
-    const result = await AIService.generatePlan(planPrompt);
+    const userConfig = getActiveUserConfig(req);
+    const result = await AIService.generatePlan(userConfig, planPrompt);
     return res.json({
       ...result.data,
       mode: "live"
@@ -244,6 +295,7 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
 // POST /api/generate
 app.post("/api/generate", async (req, res) => {
   try {
+    const userConfig = getActiveUserConfig(req);
     const { prompt, blockchain, language, framework, contractType, plan } = req.body;
 
     if (!prompt) {
@@ -333,7 +385,7 @@ YOU MUST output a JSON response conforming strictly to this JSON format:
 Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
 `;
 
-    const result = await AIService.generateWorkspace(extendedPrompt);
+    const result = await AIService.generateWorkspace(userConfig, extendedPrompt);
     const parsed = result.data;
 
     if (parsed && Array.isArray(parsed.files)) {
@@ -365,7 +417,7 @@ Do NOT output markdown wrappers. Return raw, parsing-valid JSON.
 `;
 
       try {
-        const validatedResult = await AIService.compileAnalysis(validationPrompt);
+        const validatedResult = await AIService.compileAnalysis(userConfig, validationPrompt);
         const validatedParsed = validatedResult.data;
         
         if (validatedParsed && Array.isArray(validatedParsed.files)) {
@@ -396,6 +448,7 @@ Do NOT output markdown wrappers. Return raw, parsing-valid JSON.
 
 // POST /api/edit
 app.post("/api/edit", async (req, res) => {
+  const userConfig = getActiveUserConfig(req);
   const { projectId, instruction, files } = req.body;
 
   if (!instruction || !files) {
@@ -450,7 +503,7 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 `;
 
   try {
-    const result = await AIService.editWorkspace(editingPrompt);
+    const result = await AIService.editWorkspace(userConfig, editingPrompt);
     return res.json({
       ...result.data,
       mode: "live"
@@ -467,6 +520,7 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 
 // POST /api/audit
 app.post("/api/audit", async (req, res) => {
+  const userConfig = getActiveUserConfig(req);
   const { files } = req.body;
 
   if (!files) {
@@ -504,7 +558,7 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 `;
 
   try {
-    const result = await AIService.auditWorkspace(auditPrompt);
+    const result = await AIService.auditWorkspace(userConfig, auditPrompt);
     return res.json({
       ...result.data,
       mode: "live"
@@ -521,6 +575,7 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 
 // POST /api/compile
 app.post("/api/compile", async (req, res) => {
+  const userConfig = getActiveUserConfig(req);
   const { blockchain, framework, files } = req.body;
   if (!files || files.length === 0) {
     return res.status(400).json({ error: "No files found to compile" });
@@ -557,7 +612,7 @@ Do NOT output markdown wrappers like \`\`\`json. Return only raw, parsing-valid 
 `;
 
   try {
-    const result = await AIService.compileAnalysis(compilerPrompt);
+    const result = await AIService.compileAnalysis(userConfig, compilerPrompt);
     const parsed = result.data;
     return res.json({
       success: parsed.success,
