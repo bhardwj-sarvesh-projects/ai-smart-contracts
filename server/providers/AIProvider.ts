@@ -1,15 +1,51 @@
+export interface AIResponse {
+  text: string;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  model: string;
+  durationMs: number;
+}
+
+export interface HealthResponse {
+  success: boolean;
+  latencyMs: number;
+  modelUsed: string;
+  error?: string;
+}
+
 export interface AIProvider {
-  generate(prompt: string): Promise<string>;
+  readonly name: string;
 
-  generatePlan(prompt: string): Promise<string>;
+  generate(
+    prompt: string,
+    systemInstruction?: string,
+    responseMimeType?: string
+  ): Promise<AIResponse>;
 
-  audit(prompt: string): Promise<string>;
+  edit(
+    prompt: string,
+    systemInstruction?: string
+  ): Promise<AIResponse>;
 
-  edit(prompt: string): Promise<string>;
+  audit(
+    prompt: string,
+    systemInstruction?: string
+  ): Promise<AIResponse>;
 
-  health(): Promise<{
-    provider: string;
-    connected: boolean;
-    model: string;
-  }>;
+  plan(
+    prompt: string,
+    systemInstruction?: string
+  ): Promise<AIResponse>;
+
+  compileAnalysis(
+    prompt: string,
+    systemInstruction?: string
+  ): Promise<AIResponse>;
+
+  healthCheck(): Promise<HealthResponse>;
+
+  testConnection(): Promise<any>;
 }
