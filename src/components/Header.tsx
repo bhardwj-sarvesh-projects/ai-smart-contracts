@@ -17,7 +17,7 @@ interface HeaderProps {
   onToggleTheme: () => void;
   activeTab: 'dashboard' | 'workspace' | 'auditing';
   onChangeTab: (tab: 'dashboard' | 'workspace' | 'auditing') => void;
-  currentUser: AppUser;
+  currentUser: any;
   activeProvider: string;
   onOpenSettings: () => void;
   onLogout: () => void;
@@ -288,13 +288,13 @@ export default function Header({
           {currentUser?.photoURL ? (
             <img 
               src={currentUser.photoURL} 
-              alt={currentUser.displayName} 
+              alt={currentUser.displayName || currentUser.fullName || 'User'} 
               className="w-6 h-6 rounded-full border border-slate-700/80 object-cover shrink-0" 
               referrerPolicy="no-referrer" 
             />
           ) : (
             <div className="w-6 h-6 rounded-full bg-slate-800 border border-slate-700/80 flex items-center justify-center text-[10px] font-bold text-slate-300 shrink-0">
-              {currentUser?.displayName?.[0]?.toUpperCase() || 'U'}
+              {(currentUser?.displayName || currentUser?.fullName || 'U')[0]?.toUpperCase()}
             </div>
           )}
           <button

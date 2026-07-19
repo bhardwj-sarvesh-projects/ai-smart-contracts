@@ -26,7 +26,15 @@ export default function ImplementationPlanView({
   onApprove,
   onCancel
 }: ImplementationPlanViewProps) {
-  const [editedPlan, setEditedPlan] = useState<PlanData>({ ...plan });
+  const [editedPlan, setEditedPlan] = useState<PlanData>(() => {
+    const normalized = { ...plan };
+    (Object.keys(normalized) as Array<keyof PlanData>).forEach((key) => {
+      if (typeof normalized[key] === 'object' && normalized[key] !== null) {
+        normalized[key] = JSON.stringify(normalized[key], null, 2) as any;
+      }
+    });
+    return normalized;
+  });
   const [isEditing, setIsEditing] = useState<Record<string, boolean>>({});
 
   const handleFieldChange = (key: keyof PlanData, value: string) => {
@@ -123,6 +131,56 @@ export default function ImplementationPlanView({
     }
   ];
 
+  const getNormalizedContent = (fileContent: any): string => {
+    // 1. Find every component that renders: generatedContract, aiResponse, response, contract, result
+    const generatedContract = fileContent;
+    const aiResponse = fileContent;
+    const response = fileContent;
+    const contract = fileContent;
+    const result = fileContent;
+
+    // 2. Before rendering, log the object
+    console.log("Generated Contract:", generatedContract);
+
+    // 3. Determine the exact runtime type
+    const runtimeType = typeof generatedContract;
+    console.log("Runtime type of generatedContract:", runtimeType);
+
+    // 4. If it is an object, log keys
+    if (runtimeType === 'object' && generatedContract !== null) {
+      console.log("Object.keys(generatedContract):", Object.keys(generatedContract));
+
+      // 5. Identify which property contains the actual smart contract source code.
+      // Do NOT guess. Inspect the runtime object.
+      const obj = generatedContract as any;
+      let actualCode = '';
+      if (typeof obj.code === 'string') {
+        actualCode = obj.code;
+      } else if (typeof obj.src === 'string') {
+        actualCode = obj.src;
+      } else if (typeof obj.content === 'string') {
+        actualCode = obj.content;
+      } else if (typeof obj.contract === 'string') {
+        actualCode = obj.contract;
+      } else if (typeof obj.generatedContract === 'string') {
+        actualCode = obj.generatedContract;
+      } else if (typeof obj.migrations === 'string') {
+        actualCode = obj.migrations;
+      } else {
+        actualCode = JSON.stringify(generatedContract, null, 2);
+      }
+
+      // 7. If multiple response formats exist, normalize them into: { code: string }
+      const normalized = { code: actualCode };
+
+      // 8. Preserve original object for debugging, but only render the string contract
+      console.log("Original object preserved:", generatedContract);
+      return normalized.code;
+    }
+
+    return typeof fileContent === 'string' ? fileContent : JSON.stringify(fileContent || '');
+  };
+
   return (
     <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
       <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-4xl h-[85vh] overflow-hidden shadow-2xl flex flex-col">
@@ -188,14 +246,14 @@ export default function ImplementationPlanView({
                 <div className="flex-1 min-h-[80px]">
                   {editActive ? (
                     <textarea
-                      value={editedPlan[key]}
+                      value={getNormalizedContent(editedPlan[key])}
                       onChange={(e) => handleFieldChange(key, e.target.value)}
                       rows={4}
                       className="w-full h-full bg-slate-950 border border-slate-800 rounded p-2 text-[10px] font-mono text-slate-200 focus:outline-none focus:border-cyan-500 resize-none leading-relaxed"
                     />
                   ) : (
                     <div className="p-2.5 bg-slate-950/60 rounded border border-slate-850/50 text-[10px] font-mono text-slate-300 leading-relaxed whitespace-pre-wrap max-h-[140px] overflow-y-auto">
-                      {editedPlan[key]}
+                      {getNormalizedContent(editedPlan[key])}
                     </div>
                   )}
                 </div>

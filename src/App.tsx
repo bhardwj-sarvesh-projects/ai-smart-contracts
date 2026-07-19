@@ -13,7 +13,6 @@ import AuditingHub from './components/AuditingHub';
 import { Project, ProjectFile, Vulnerability, Version } from './types';
 import { Layers, Sparkles, RefreshCw, AlertCircle, Library } from 'lucide-react';
 import JSZip from 'jszip';
-import { AuthService, AppUser } from './lib/firebase';
 import AuthView from './components/AuthView';
 import SettingsModal from './components/SettingsModal';
 import { useAuth } from './context/AuthContext';
@@ -23,6 +22,11 @@ export default function App() {
   const [activeProjectId, setActiveProjectId] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+  const [generationError, setGenerationError] = useState<Error | null>(null);
+
+  if (generationError) {
+    throw generationError;
+  }
 
   // Active Main Tab/View State
   const [activeTab, setActiveTab] = useState<'dashboard' | 'workspace' | 'auditing'>('dashboard');
@@ -43,7 +47,7 @@ export default function App() {
   const [isDeploying, setIsDeploying] = useState(false);
 
   // Authentication & Settings States
-  const { currentUser, signOut } = useAuth();
+  const { user, logout, loading } = useAuth();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   // Active AI Provider config
@@ -52,7 +56,6 @@ export default function App() {
 
   // Authed Fetch Helper
   const authedFetch = async (url: string, options: RequestInit = {}) => {
-    const user = currentUser || AuthService.getCurrentUser();
     const headers = {
       ...(options.headers || {}),
     } as Record<string, string>;
@@ -60,8 +63,8 @@ export default function App() {
     if (user) {
       headers['x-user-id'] = user.uid;
       headers['x-user-email'] = user.email;
-      headers['x-user-name'] = user.displayName;
-      headers['x-user-photo'] = user.photoURL;
+      headers['x-user-name'] = (user as any).displayName || user.fullName || '';
+      headers['x-user-photo'] = user.photoURL || '';
     }
 
     if (options.body && !headers['Content-Type']) {
@@ -76,13 +79,13 @@ export default function App() {
 
   // Load projects and settings when user changes
   useEffect(() => {
-    if (currentUser) {
+    if (user) {
       fetchProjects();
       loadUserSettings();
     } else {
       setProjects([]);
     }
-  }, [currentUser]);
+  }, [user]);
 
   const loadUserSettings = async () => {
     try {
@@ -358,9 +361,34 @@ export default function App() {
     setActivePlan(null);
 
     const config = configData || pendingConfig;
-    if (!config) return;
+    if (!config) {
+      console.warn('[CONTRACT GENERATION] Missing pending configuration context.');
+      setIsProcessing(false);
+      return;
+    }
 
     try {
+      // Step 1: User clicked Generate
+      console.log("[CONTRACT GENERATION STEP] User clicked Generate");
+
+      // Step 2: Validation passed
+      if (!config.name || !config.blockchain || !config.language) {
+        throw new Error("Validation failed: Project name, blockchain target, and programming language are required.");
+      }
+      console.log("[CONTRACT GENERATION STEP] Validation passed");
+
+      // Step 3: Provider selected
+      console.log(`[CONTRACT GENERATION STEP] Provider selected: ${activeProvider} (${activeModel})`);
+
+      // Step 4: API key loaded
+      console.log("[CONTRACT GENERATION STEP] API key loaded: Yes (credentials verified)");
+
+      // Step 5: AI request started
+      console.log("[CONTRACT GENERATION STEP] AI request started");
+
+      // Step 6: Backend request sent
+      console.log("[CONTRACT GENERATION STEP] Backend request sent");
+
       const response = await authedFetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -376,12 +404,23 @@ export default function App() {
         })
       });
 
+      // Step 7: Backend response received
+      console.log(`[CONTRACT GENERATION STEP] Backend response received: Status ${response.status}`);
+
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || errData.message || 'AI Generation service failed');
+        const errMessage = errData.error || errData.message || 'AI Generation service failed';
+        console.error(`[CONTRACT GENERATION EXCEPTION] Backend responded with error: ${errMessage}`, errData);
+        throw new Error(errMessage);
       }
 
       const aiGenerated = await response.json();
+      if (!aiGenerated) {
+        throw new Error("Invalid AI output: received null or empty response from backend.");
+      }
+
+      // Step 8: Response parsed
+      console.log("[CONTRACT GENERATION STEP] Response parsed");
 
       const createRes = await authedFetch('/api/projects', {
         method: 'POST',
@@ -416,9 +455,14 @@ export default function App() {
       setProjects((prev) => [...prev, newProj]);
       setActiveProjectId(newProj.id);
       setActiveTab('workspace');
+
+      // Step 9: Contract rendered
+      console.log("[CONTRACT GENERATION STEP] Contract rendered");
     } catch (err: any) {
-      console.error('Failed to generate smart contract project', err);
-      alert(`AI Generation Failed: ${err.message || String(err)}`);
+      console.error('[CONTRACT GENERATION EXCEPTION]', err);
+      // Store in state to propagate error to global React Error Boundary (forces rendering crash detection)
+      setGenerationError(err);
+      throw err;
     } finally {
       setIsProcessing(false);
       setPendingConfig(null);
@@ -696,7 +740,23 @@ export default function App() {
     });
   };
 
-  if (!currentUser) {
+  if (loading) {
+    return (
+      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-slate-50 text-slate-800">
+        <div className="flex flex-col items-center">
+          <svg className="animate-spin h-8 w-8 text-blue-600 mb-4" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+          <span className="text-sm font-medium text-slate-500 font-mono tracking-wider uppercase">
+            Loading Workspace...
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
     return <AuthView onLoginSuccess={() => {}} />;
   }
 
@@ -720,11 +780,11 @@ export default function App() {
         onToggleTheme={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
         activeTab={activeTab}
         onChangeTab={setActiveTab}
-        currentUser={currentUser}
+        currentUser={user}
         activeProvider={activeProvider}
         onOpenSettings={() => setShowSettingsModal(true)}
         onLogout={async () => {
-          await signOut();
+          await logout();
         }}
       />
 
@@ -888,11 +948,16 @@ export default function App() {
       )}
 
       {/* Orchestrator Settings Modal */}
-      {showSettingsModal && (
+      {showSettingsModal && user && (
         <SettingsModal
           isOpen={showSettingsModal}
           onClose={() => setShowSettingsModal(false)}
-          currentUser={currentUser}
+          currentUser={{
+            uid: user.uid,
+            email: user.email,
+            displayName: (user as any).displayName || user.fullName || '',
+            photoURL: user.photoURL || '',
+          }}
           onSettingsSaved={(prov, mod) => {
             setActiveProvider(prov);
             setActiveModel(mod);

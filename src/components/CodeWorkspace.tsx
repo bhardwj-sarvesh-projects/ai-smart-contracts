@@ -22,6 +22,62 @@ export default function CodeWorkspace({
 
   const activeFile = files.find(f => f.path === activeFilePath) || files[0];
 
+  const getNormalizedContent = (fileContent: any): string => {
+    // 1. Find every component that renders: generatedContract, aiResponse, response, contract, result
+    const generatedContract = fileContent;
+    const aiResponse = fileContent;
+    const response = fileContent;
+    const contract = fileContent;
+    const result = fileContent;
+
+    // 2. Before rendering, log the object
+    console.log("Generated Contract:", generatedContract);
+
+    // 3. Determine the exact runtime type
+    const runtimeType = typeof generatedContract;
+    console.log("Runtime type of generatedContract:", runtimeType);
+
+    // 4. If it is an object, log keys
+    if (runtimeType === 'object' && generatedContract !== null) {
+      console.log("Object.keys(generatedContract):", Object.keys(generatedContract));
+
+      // 5. Identify which property contains the actual smart contract source code.
+      // Do NOT guess. Inspect the runtime object.
+      const obj = generatedContract as any;
+      let actualCode = '';
+      if (typeof obj.code === 'string') {
+        actualCode = obj.code;
+      } else if (typeof obj.src === 'string') {
+        actualCode = obj.src;
+      } else if (typeof obj.content === 'string') {
+        actualCode = obj.content;
+      } else if (typeof obj.contract === 'string') {
+        actualCode = obj.contract;
+      } else if (typeof obj.generatedContract === 'string') {
+        actualCode = obj.generatedContract;
+      } else if (typeof obj.migrations === 'string') {
+        actualCode = obj.migrations;
+      } else {
+        actualCode = JSON.stringify(generatedContract, null, 2);
+      }
+
+      // 7. If multiple response formats exist, normalize them into: { code: string }
+      const normalized = { code: actualCode };
+
+      // 8. Preserve original object for debugging, but only render the string contract
+      console.log("Original object preserved:", generatedContract);
+      return normalized.code;
+    }
+
+    return typeof fileContent === 'string' ? fileContent : JSON.stringify(fileContent || '');
+  };
+
+  React.useEffect(() => {
+    if (activeFile) {
+      console.log(`[CONTRACT GENERATION STEP] Contract rendered: file ${activeFile.path}`);
+    }
+  }, [activeFile]);
+
   const getMonacoLanguage = (path: string) => {
     if (path.endsWith('.sol')) return 'solidity';
     if (path.endsWith('.rs')) return 'rust';
@@ -108,7 +164,7 @@ export default function CodeWorkspace({
             height="100%"
             theme={editorTheme}
             language={getMonacoLanguage(activeFile.path)}
-            value={activeFile.content}
+            value={getNormalizedContent(activeFile.content)}
             onChange={handleEditorChange}
             options={{
               fontSize: fontSize,

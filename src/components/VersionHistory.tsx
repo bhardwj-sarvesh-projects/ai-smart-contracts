@@ -56,14 +56,68 @@ export default function VersionHistory({
     v.summary.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const getNormalizedContent = (fileContent: any): string => {
+    // 1. Find every component that renders: generatedContract, aiResponse, response, contract, result
+    const generatedContract = fileContent;
+    const aiResponse = fileContent;
+    const response = fileContent;
+    const contract = fileContent;
+    const result = fileContent;
+
+    // 2. Before rendering, log the object
+    console.log("Generated Contract:", generatedContract);
+
+    // 3. Determine the exact runtime type
+    const runtimeType = typeof generatedContract;
+    console.log("Runtime type of generatedContract:", runtimeType);
+
+    // 4. If it is an object, log keys
+    if (runtimeType === 'object' && generatedContract !== null) {
+      console.log("Object.keys(generatedContract):", Object.keys(generatedContract));
+
+      // 5. Identify which property contains the actual smart contract source code.
+      // Do NOT guess. Inspect the runtime object.
+      const obj = generatedContract as any;
+      let actualCode = '';
+      if (typeof obj.code === 'string') {
+        actualCode = obj.code;
+      } else if (typeof obj.src === 'string') {
+        actualCode = obj.src;
+      } else if (typeof obj.content === 'string') {
+        actualCode = obj.content;
+      } else if (typeof obj.contract === 'string') {
+        actualCode = obj.contract;
+      } else if (typeof obj.generatedContract === 'string') {
+        actualCode = obj.generatedContract;
+      } else if (typeof obj.migrations === 'string') {
+        actualCode = obj.migrations;
+      } else {
+        actualCode = JSON.stringify(generatedContract, null, 2);
+      }
+
+      // 7. If multiple response formats exist, normalize them into: { code: string }
+      const normalized = { code: actualCode };
+
+      // 8. Preserve original object for debugging, but only render the string contract
+      console.log("Original object preserved:", generatedContract);
+      return normalized.code;
+    }
+
+    return typeof fileContent === 'string' ? fileContent : JSON.stringify(fileContent || '');
+  };
+
   // Compute a beautiful inline text diff comparison
   const renderDiff = (file1: ProjectFile | undefined, file2: ProjectFile | undefined) => {
     if (!file1 && !file2) return <p className="text-slate-500 text-xs">No file selected for comparison.</p>;
-    if (!file1) return <pre className="p-3 bg-emerald-950/20 text-emerald-400 text-[10px] rounded font-mono whitespace-pre-wrap leading-relaxed">+ Entire File Added:\n\n{file2?.content}</pre>;
-    if (!file2) return <pre className="p-3 bg-rose-950/20 text-rose-400 text-[10px] rounded font-mono whitespace-pre-wrap leading-relaxed">- Entire File Removed:\n\n{file1?.content}</pre>;
+    
+    const content1 = file1 ? getNormalizedContent(file1.content) : '';
+    const content2 = file2 ? getNormalizedContent(file2.content) : '';
 
-    const lines1 = file1.content.split('\n');
-    const lines2 = file2.content.split('\n');
+    if (!file1) return <pre className="p-3 bg-emerald-950/20 text-emerald-400 text-[10px] rounded font-mono whitespace-pre-wrap leading-relaxed">+ Entire File Added:\n\n{content2}</pre>;
+    if (!file2) return <pre className="p-3 bg-rose-950/20 text-rose-400 text-[10px] rounded font-mono whitespace-pre-wrap leading-relaxed">- Entire File Removed:\n\n{content1}</pre>;
+
+    const lines1 = content1.split('\n');
+    const lines2 = content2.split('\n');
 
     // A simple line-by-line diff visualizer
     const diffBlocks: React.ReactNode[] = [];

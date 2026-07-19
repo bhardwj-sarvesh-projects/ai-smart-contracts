@@ -1,115 +1,131 @@
 import React, { useState } from 'react';
-import { Sparkles, ArrowRight, ShieldCheck, Cpu } from 'lucide-react';
+import { ShieldCheck, ArrowUpRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import LoginCard from './auth/LoginCard';
+import SignUpCard from './auth/SignUpCard';
+import ForgotPasswordCard from './auth/ForgotPasswordCard';
 
 interface AuthViewProps {
   onLoginSuccess: (user: any) => void;
 }
 
 export default function AuthView({ onLoginSuccess }: AuthViewProps) {
+  const [view, setView] = useState<'login' | 'signup' | 'forgot_password'>('login');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { signInWithGoogle } = useAuth();
+  const { login, signup, forgotPassword } = useAuth();
 
-  const handleGoogleLogin = async () => {
+  const handleEmailLogin = async (email: string, password: string) => {
     setIsAuthenticating(true);
     setError(null);
     try {
-      const user = await signInWithGoogle();
-      onLoginSuccess(user);
+      const loggedInUser = await login(email, password);
+      onLoginSuccess(loggedInUser);
     } catch (err: any) {
-      setError(err.message || 'Authentication failed. Please try again.');
+      setError(err.message || 'Authentication failed. Please check your credentials.');
+      throw err;
     } finally {
       setIsAuthenticating(false);
     }
   };
 
+  const handleEmailSignUp = async (email: string, password: string, fullName: string) => {
+    setIsAuthenticating(true);
+    setError(null);
+    try {
+      const newUser = await signup(email, password, fullName);
+      onLoginSuccess(newUser);
+    } catch (err: any) {
+      setError(err.message || 'Registration failed. Please try again.');
+      throw err;
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleResetSent = async (email: string) => {
+    setError(null);
+    try {
+      await forgotPassword(email);
+    } catch (err: any) {
+      setError(err.message || 'Failed to send password reset email.');
+      throw err;
+    }
+  };
+
+  const handleGoogleLogin = () => {
+    setError('Google Single Sign-On is currently restricted. Please authenticate using your Email and Password.');
+  };
+
   return (
-    <div id="auth-view" className="relative min-h-screen w-full flex items-center justify-center bg-slate-950 overflow-hidden text-slate-100">
-      {/* Decorative cosmic background glow effects */}
-      <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-indigo-500/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-[500px] h-[500px] bg-emerald-500/5 rounded-full blur-[120px] pointer-events-none" />
+    <div id="auth-view" className="relative min-h-screen w-full flex items-center justify-center bg-slate-50 overflow-hidden text-slate-800">
+      {/* Subtle modern vector grid background for clean SaaS feel */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#e2e8f0_1px,transparent_1px),linear-gradient(to_bottom,#e2e8f0_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)] opacity-60 pointer-events-none" />
 
-      {/* Decorative subtle stars overlay */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.015)_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
+      {/* Soft blue glowing gradient in background */}
+      <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-blue-500/5 rounded-full blur-[140px] pointer-events-none" />
 
-      {/* Auth Card Container */}
-      <div className="relative z-10 w-full max-w-md px-6 py-12">
-        <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-8 backdrop-blur-xl shadow-2xl relative overflow-hidden transition duration-500 hover:border-slate-700/80">
-          {/* Top border glowing gradient */}
-          <div className="absolute top-0 inset-x-0 h-[1px] bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent" />
+      {/* Decorative Top Banner/Link for preview context */}
+      <div className="absolute top-6 left-6 right-6 flex items-center justify-between pointer-events-none select-none hidden sm:flex">
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse" />
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-widest font-mono">
+            SmartContract.ai Studio
+          </span>
+        </div>
+        <a 
+          href="https://smartcontract.ai" 
+          target="_blank" 
+          rel="noopener noreferrer" 
+          className="pointer-events-auto flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 transition-colors"
+        >
+          Documentation
+          <ArrowUpRight size={14} />
+        </a>
+      </div>
 
-          {/* Logo Area */}
-          <div className="flex flex-col items-center text-center space-y-4">
-            <div className="relative">
-              <div className="p-4 bg-indigo-500/10 rounded-2xl border border-indigo-500/20 text-indigo-400 relative z-10 animate-pulse">
-                <Cpu size={32} />
-              </div>
-              <div className="absolute inset-0 bg-indigo-500/20 rounded-2xl filter blur-xl opacity-50 scale-110 pointer-events-none" />
-            </div>
+      {/* Form Container */}
+      <div className="relative z-10 w-full max-w-lg px-6 py-12 flex flex-col items-center">
+        <div className="w-full max-w-md transition-all duration-300">
+          {view === 'login' && (
+            <LoginCard
+              onNavigate={setView}
+              onLogin={handleEmailLogin}
+              onGoogleLogin={handleGoogleLogin}
+              isAuthenticating={isAuthenticating}
+              error={error}
+            />
+          )}
 
-            <div>
-              <div className="flex items-center justify-center gap-1.5">
-                <span className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider text-indigo-400 bg-indigo-500/10 rounded-full border border-indigo-500/20">
-                  Version 2.0
-                </span>
-              </div>
-              <h1 className="font-sans font-bold text-2xl mt-3 tracking-tight bg-gradient-to-r from-white via-slate-200 to-indigo-200 bg-clip-text text-transparent">
-                SmartContract.ai Studio
-              </h1>
-              <p className="text-sm text-slate-400 mt-2 max-w-xs leading-relaxed">
-                Professional Multi-AI Compiler, Auditor, & Generative Workspace
-              </p>
-            </div>
-          </div>
+          {view === 'signup' && (
+            <SignUpCard
+              onNavigate={setView}
+              onSignUp={handleEmailSignUp}
+              onGoogleLogin={handleGoogleLogin}
+              isAuthenticating={isAuthenticating}
+              error={error}
+            />
+          )}
 
-          {/* Interactive login button */}
-          <div className="mt-10 space-y-4">
-            <button
-              id="google-signin-btn"
-              type="button"
-              onClick={handleGoogleLogin}
-              disabled={isAuthenticating}
-              className="w-full flex items-center justify-center gap-3 px-5 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm rounded-2xl shadow-lg shadow-indigo-600/15 border border-indigo-500/50 hover:border-indigo-400 focus:outline-none transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none group"
-            >
-              {isAuthenticating ? (
-                <span className="flex items-center gap-2">
-                  <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  Establishing Secure Session...
-                </span>
-              ) : (
-                <>
-                  <svg className="w-4 h-4 fill-current text-white" viewBox="0 0 24 24">
-                    <path d="M12.24 10.285V13.4h6.887C18.2 15.614 15.645 18 12.24 18c-3.86 0-7-3.14-7-7s3.14-7 7-7c1.7 0 3.25.61 4.47 1.61L19.1 3.2C17.21 1.45 14.81.4 12.24.4 5.83.4.63 5.6.63 12s5.2 11.6 11.61 11.6c6.68 0 11.13-4.7 11.13-11.34 0-.76-.08-1.33-.23-1.98H12.24z" />
-                  </svg>
-                  Continue with Google Login
-                  <ArrowRight size={15} className="ml-0.5 group-hover:translate-x-1 transition-transform" />
-                </>
-              )}
-            </button>
-
-            {/* Error messaging */}
-            {error && (
-              <div id="auth-error" className="p-3 bg-rose-500/5 border border-rose-500/20 rounded-xl text-rose-300 text-xs text-center animate-shake">
-                {error}
-              </div>
-            )}
-          </div>
-
-          {/* Trust/Compliance footer inside the card */}
-          <div className="mt-8 pt-6 border-t border-slate-800/60 flex items-center justify-center gap-2 text-[11px] text-slate-500 font-medium">
-            <ShieldCheck size={14} className="text-emerald-500" />
-            <span>Encrypted cloud session secured by AES-256</span>
-          </div>
+          {view === 'forgot_password' && (
+            <ForgotPasswordCard
+              onNavigate={setView}
+              onResetSent={handleResetSent}
+              isAuthenticating={isAuthenticating}
+            />
+          )}
         </div>
 
-        {/* Minimal outer tagline */}
-        <p className="text-center text-[11px] text-slate-600 mt-6 tracking-wide uppercase font-semibold">
-          Crafted for Enterprise Smart Contract Engineering
-        </p>
+        {/* Brand Compliance Footer */}
+        <div className="mt-8 flex flex-col items-center gap-3 text-center">
+          <div className="flex items-center gap-2 text-xs text-slate-400 font-medium bg-white/80 border border-slate-100 rounded-full px-4 py-1.5 shadow-sm">
+            <ShieldCheck size={14} className="text-blue-500" />
+            <span>Secure Enterprise Single Sign-On enabled</span>
+          </div>
+          <p className="text-[10px] text-slate-400 font-semibold tracking-wider uppercase">
+            © 2026 SmartContract.ai Studio. All rights reserved.
+          </p>
+        </div>
       </div>
     </div>
   );

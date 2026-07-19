@@ -687,6 +687,17 @@ app.post("/api/deploy", (req, res) => {
 });
 
 
+// Global Express Error-handling Middleware
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("[UNCAUGHT EXPRESS EXCEPTION]", err);
+  res.status(500).json({
+    success: false,
+    error: err.message || String(err),
+    stack: err.stack || "No stack trace available"
+  });
+});
+
+
 // -------------------------------------------------------------
 // VITE DEV SERVER / MIDDLEWARE OR PROD STATIC SERVER
 // -------------------------------------------------------------

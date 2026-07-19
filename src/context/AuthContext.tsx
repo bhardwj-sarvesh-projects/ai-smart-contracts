@@ -1,112 +1,126 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut as firebaseSignOut } from 'firebase/auth';
-import { auth, googleProvider } from '../firebase/firebase';
-
-export interface AppUser {
-  uid: string;
-  email: string;
-  displayName: string;
-  photoURL: string;
-}
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth, isFirebaseConfigured } from '../firebase/firebase';
+import { AuthService, UserProfile } from '../firebase/authService';
 
 interface AuthContextType {
-  currentUser: AppUser | null;
+  user: UserProfile | null;
   loading: boolean;
-  signInWithGoogle: () => Promise<AppUser | null>;
-  signOut: () => Promise<void>;
+  login: (email: string, password: string) => Promise<UserProfile>;
+  signup: (email: string, password: string, fullName: string) => Promise<UserProfile>;
+  logout: () => Promise<void>;
+  forgotPassword: (email: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
-    // Check if there is already a saved user in localStorage (simulated or real)
-    const saved = localStorage.getItem("app_user");
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  });
+  const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!auth) {
+    if (!isFirebaseConfigured || !auth) {
+      // Simulate/Restore active offline session
+      const offlineUserStr = localStorage.getItem('offline_user');
+      if (offlineUserStr) {
+        try {
+          setUser(JSON.parse(offlineUserStr));
+        } catch (_) {
+          setUser(null);
+        }
+      } else {
+        setUser(null);
+      }
       setLoading(false);
       return;
     }
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setLoading(true);
       if (firebaseUser) {
-        const u: AppUser = {
-          uid: firebaseUser.uid,
-          email: firebaseUser.email || "",
-          displayName: firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "Developer",
-          photoURL: firebaseUser.photoURL || "",
-        };
-        localStorage.setItem("app_user", JSON.stringify(u));
-        setCurrentUser(u);
-      } else {
-        // If not in offline simulated mode, clear current user
-        if (!localStorage.getItem("app_user_offline")) {
-          localStorage.removeItem("app_user");
-          setCurrentUser(null);
+        try {
+          const profile = await AuthService.getUserProfile(firebaseUser.uid);
+          if (profile) {
+            setUser(profile);
+          } else {
+            // Document might be in the process of being created (e.g., during sign up)
+            setUser({
+              uid: firebaseUser.uid,
+              fullName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+              email: firebaseUser.email || '',
+              role: 'user',
+              isActive: true,
+              createdAt: new Date().toISOString(),
+              lastLogin: new Date().toISOString(),
+              photoURL: firebaseUser.photoURL || '',
+              preferences: {},
+              aiSettings: {}
+            });
+          }
+        } catch (error) {
+          console.error('[AUTH_CONTEXT] Error fetching user profile:', error);
+          setUser({
+            uid: firebaseUser.uid,
+            fullName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+            email: firebaseUser.email || '',
+            role: 'user',
+            isActive: true,
+            createdAt: new Date().toISOString(),
+            lastLogin: new Date().toISOString(),
+            photoURL: firebaseUser.photoURL || '',
+            preferences: {},
+            aiSettings: {}
+          });
         }
+      } else {
+        setUser(null);
       }
       setLoading(false);
     });
+
     return unsubscribe;
   }, []);
 
-  const signInWithGoogle = async (): Promise<AppUser | null> => {
-    if (auth && googleProvider) {
-      try {
-        const result = await signInWithPopup(auth, googleProvider);
-        const u: AppUser = {
-          uid: result.user.uid,
-          email: result.user.email || "",
-          displayName: result.user.displayName || result.user.email?.split("@")[0] || "Developer",
-          photoURL: result.user.photoURL || "",
-        };
-        localStorage.setItem("app_user", JSON.stringify(u));
-        localStorage.removeItem("app_user_offline");
-        setCurrentUser(u);
-        return u;
-      } catch (err) {
-        console.warn("[FIREBASE] Popup blocked or failed. Activating robust simulated secure sign-in.", err);
-      }
-    }
 
-    // Simulated auth fallback - extremely critical for sandboxed iframe environments
-    const mockUser: AppUser = {
-      uid: "usr_google_preview_user_2026",
-      email: "developer@smartcontract.ai",
-      displayName: "Principal Developer",
-      photoURL: "https://lh3.googleusercontent.com/a/default-user=s96-c",
-    };
-    localStorage.setItem("app_user", JSON.stringify(mockUser));
-    localStorage.setItem("app_user_offline", "true");
-    setCurrentUser(mockUser);
-    return mockUser;
+  const login = async (email: string, password: string): Promise<UserProfile> => {
+    try {
+      const profile = await AuthService.login(email, password);
+      setUser(profile);
+      return profile;
+    } catch (error) {
+      throw error;
+    }
   };
 
-  const signOut = async () => {
-    localStorage.removeItem("app_user");
-    localStorage.removeItem("app_user_offline");
-    setCurrentUser(null);
-    if (auth) {
-      try {
-        await firebaseSignOut(auth);
-      } catch (err) {
-        console.error("Firebase logout failed:", err);
-      }
+  const signup = async (email: string, password: string, fullName: string): Promise<UserProfile> => {
+    try {
+      const profile = await AuthService.signup(email, password, fullName);
+      setUser(profile);
+      return profile;
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  const logout = async (): Promise<void> => {
+    try {
+      await AuthService.logout();
+      setUser(null);
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  const forgotPassword = async (email: string): Promise<void> => {
+    try {
+      await AuthService.forgotPassword(email);
+    } catch (error) {
+      throw error;
     }
   };
 
   return (
-    <AuthContext.Provider value={{ currentUser, loading, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ user, loading, login, signup, logout, forgotPassword }}>
       {children}
     </AuthContext.Provider>
   );
