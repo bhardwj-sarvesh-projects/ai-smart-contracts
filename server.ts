@@ -4,7 +4,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { AIService } from "./server/services/AIService";
-import { OPENAI_MODEL } from "./src/config/openai";
+import { OPENAI_MODEL } from "./server/config/ai";
 
 dotenv.config();
 

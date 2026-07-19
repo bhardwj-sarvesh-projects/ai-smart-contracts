@@ -1,5 +1,9 @@
 import OpenAI from "openai";
-import { OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TIMEOUT } from "../../src/config/openai";
+import {
+  OPENAI_API_KEY,
+  OPENAI_MODEL,
+  OPENAI_TIMEOUT,
+} from "../config/ai";
 
 export interface AIResponse {
   text: string;
