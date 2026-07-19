@@ -16,6 +16,7 @@ import JSZip from 'jszip';
 import { AuthService, AppUser } from './lib/firebase';
 import AuthView from './components/AuthView';
 import SettingsModal from './components/SettingsModal';
+import { useAuth } from './context/AuthContext';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -42,7 +43,7 @@ export default function App() {
   const [isDeploying, setIsDeploying] = useState(false);
 
   // Authentication & Settings States
-  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const { currentUser, signOut } = useAuth();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   // Active AI Provider config
@@ -72,14 +73,6 @@ export default function App() {
       headers,
     });
   };
-
-  // User Session sync
-  useEffect(() => {
-    const unsubscribe = AuthService.onUserChange((user) => {
-      setCurrentUser(user);
-    });
-    return unsubscribe;
-  }, []);
 
   // Load projects and settings when user changes
   useEffect(() => {
@@ -704,7 +697,7 @@ export default function App() {
   };
 
   if (!currentUser) {
-    return <AuthView onLoginSuccess={(user) => setCurrentUser(user)} />;
+    return <AuthView onLoginSuccess={() => {}} />;
   }
 
   return (
@@ -731,8 +724,7 @@ export default function App() {
         activeProvider={activeProvider}
         onOpenSettings={() => setShowSettingsModal(true)}
         onLogout={async () => {
-          await AuthService.logout();
-          setCurrentUser(null);
+          await signOut();
         }}
       />
 

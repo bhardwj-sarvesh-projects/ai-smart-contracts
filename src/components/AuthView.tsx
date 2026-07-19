@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Sparkles, ArrowRight, ShieldCheck, Cpu } from 'lucide-react';
-import { AuthService } from '../lib/firebase';
+import { useAuth } from '../context/AuthContext';
 
 interface AuthViewProps {
   onLoginSuccess: (user: any) => void;
@@ -9,12 +9,13 @@ interface AuthViewProps {
 export default function AuthView({ onLoginSuccess }: AuthViewProps) {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { signInWithGoogle } = useAuth();
 
   const handleGoogleLogin = async () => {
     setIsAuthenticating(true);
     setError(null);
     try {
-      const user = await AuthService.loginWithGoogle();
+      const user = await signInWithGoogle();
       onLoginSuccess(user);
     } catch (err: any) {
       setError(err.message || 'Authentication failed. Please try again.');
