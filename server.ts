@@ -4,6 +4,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { AIService } from "./server/services/AIService";
+import { OPENAI_MODEL } from "./src/config/openai";
 
 dotenv.config();
 
@@ -57,19 +58,17 @@ app.get("/api/health", async (req, res) => {
     res.json({
       status: result.success ? "ok" : "error",
       provider: "openai",
-      model: result.modelUsed,
+      model: OPENAI_MODEL,
       latency: result.latencyMs,
-      success: result.success,
-      error: result.error || null
+      success: result.success
     });
   } catch (err: any) {
     res.json({
       status: "error",
       provider: "openai",
-      model: process.env.AI_MODEL || "gpt-4o",
+      model: OPENAI_MODEL,
       latency: 0,
-      success: false,
-      error: err.message || "Failed health check"
+      success: false
     });
   }
 });
@@ -162,8 +161,6 @@ app.delete("/api/projects/:id", (req, res) => {
 
 // POST /api/generate-plan
 app.post("/api/generate-plan", async (req, res) => {
-  const isDemoMode = req.query.demo === "true" || req.body.demo === true || process.env.DEMO_MODE === "true" || !process.env.OPENAI_API_KEY;
-
   try {
     const { prompt, blockchain, language, framework, contractType } = req.body;
     if (!prompt) {
@@ -205,51 +202,17 @@ Format the output strictly as a JSON object with these keys:
 Do NOT output markdown wrappers, chat explanations, or conversational filler. Return only raw, parsing-valid JSON.
 `;
 
-    if (process.env.OPENAI_API_KEY) {
-      const result = await AIService.generatePlan(planPrompt);
-      return res.json({
-        ...result.data,
-        mode: "live"
-      });
-    }
-
-    if (!isDemoMode) {
-      return res.status(500).json({
-        success: false,
-        provider: "openai",
-        error: "OpenAI API key is missing. Please configure OPENAI_API_KEY.",
-        details: "No OPENAI_API_KEY found in process.env"
-      });
-    }
-
-    // Default high-fidelity plan template tailored dynamically for Demo Mode
-    const name = prompt.split(" ").slice(0, 3).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ").replace(/[^a-zA-Z0-9 ]/g, "") || "SmartContract";
-    const className = name.replace(/\s+/g, "");
-
-    const simulatedPlan = {
-      businessRequirements: `Develop a state-of-the-art ${contractType} supporting "${prompt}". Enforce absolute precision, zero-balance safety, and clean asset transfers.`,
-      architecture: `Single-module or multi-module layout implementing standard modular paradigms. Built on standard verified bases (e.g. OpenZeppelin / Anchor Account validation tree) to ensure high interoperability and compatibility.`,
-      storageDesign: `Includes owner credentials, standard status booleans, mappings for addresses to account values, custom state structures, and event tracking state indices.`,
-      permissionModel: `Utilizes safe ownership protocols (like Ownable2Step or authority keys) to secure administrative and modifier-gated write operations.`,
-      events: `Defines clear auditable transaction log triggers for all critical state modifications, transfers, state alterations, and administration changes.`,
-      customErrors: `Adopts gas-optimized custom errors (e.g. UnauthorizedAccount, InvalidParameterValue, InsufficientBalance, OverflowAttempt) instead of heavy string reasons.`,
-      validationRules: `Inputs are systematically sanitized via assertion guard patterns, ensuring address parameters are non-zero, balances satisfy minimum thresholds, and arrays match required boundaries.`,
-      securityConsiderations: `Equipped with strict ReentrancyGuard, custom reentrancy protections, safe-math overflows handling, checks-effects-interactions coding pattern, and emergency pausable stop triggers.`,
-      folderStructure: `Standard production workspace layout conforming with the ${framework} structure:\n- contracts/\n- test/\n- scripts/\n- package.json\n- README.md`,
-      testStrategy: `Comprehensive unit test suite writing Mocha/Chai or Rust Anchor Test assertions validating full coverage across core edge-cases and permissions.`,
-      deploymentStrategy: `Automated deploy script scripts/deploy.js configuring gas ceilings, initializing state parameters, and verifying code on Explorer.`
-    };
-
+    const result = await AIService.generatePlan(planPrompt);
     return res.json({
-      ...simulatedPlan,
-      mode: "simulated"
+      ...result.data,
+      mode: "live"
     });
   } catch (err: any) {
     console.error("Plan endpoint error:", err);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       provider: "openai",
-      error: "Failed to generate plan",
+      error: err.message || "Failed to generate plan",
       details: err.message || String(err)
     });
   }
@@ -261,8 +224,6 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
 
 // POST /api/generate
 app.post("/api/generate", async (req, res) => {
-  const isDemoMode = req.query.demo === "true" || req.body.demo === true || process.env.DEMO_MODE === "true" || !process.env.OPENAI_API_KEY;
-
   try {
     const { prompt, blockchain, language, framework, contractType, plan } = req.body;
 
@@ -353,16 +314,15 @@ YOU MUST output a JSON response conforming strictly to this JSON format:
 Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
 `;
 
-    if (process.env.OPENAI_API_KEY) {
-      const result = await AIService.generateWorkspace(extendedPrompt);
-      const parsed = result.data;
+    const result = await AIService.generateWorkspace(extendedPrompt);
+    const parsed = result.data;
 
-      if (parsed && Array.isArray(parsed.files)) {
-        console.log(`[AI PLATFORM] Project "${parsed.name}" generated. Initiating Step 6: Internal Validation...`);
-        
-        // Internal Validation Call to review and auto-repair compile issues
-        const filesContext = parsed.files.map((f: any) => `### FILE: ${f.path}\nContent:\n${f.content}\n`).join("\n");
-        const validationPrompt = `
+    if (parsed && Array.isArray(parsed.files)) {
+      console.log(`[AI PLATFORM] Project "${parsed.name}" generated. Initiating Step 6: Internal Validation...`);
+      
+      // Internal Validation Call to review and auto-repair compile issues
+      const filesContext = parsed.files.map((f: any) => `### FILE: ${f.path}\nContent:\n${f.content}\n`).join("\n");
+      const validationPrompt = `
 You are a Principal Smart Contract Compiler and Security Validator.
 Review the following generated smart contract files for syntax errors, wrong imports, compile warnings, or logic bugs.
 If any issues are found, resolve them by rewriting the files perfectly.
@@ -385,49 +345,32 @@ Output the validated files in this JSON format:
 Do NOT output markdown wrappers. Return raw, parsing-valid JSON.
 `;
 
-        try {
-          const validatedResult = await AIService.compileAnalysis(validationPrompt);
-          const validatedParsed = validatedResult.data;
-          
-          if (validatedParsed && Array.isArray(validatedParsed.files)) {
-            console.log(`[AI PLATFORM] Step 6 Internal Validation completed successfully.`);
-            parsed.files = validatedParsed.files;
-            parsed.validationReport = validatedParsed.validationReport || "Validated successfully.";
-          }
-        } catch (vErr) {
-          console.warn("[AI PLATFORM] Step 6 Internal Validation met an error (continuing with baseline generated files):", vErr);
+      try {
+        const validatedResult = await AIService.compileAnalysis(validationPrompt);
+        const validatedParsed = validatedResult.data;
+        
+        if (validatedParsed && Array.isArray(validatedParsed.files)) {
+          console.log(`[AI PLATFORM] Step 6 Internal Validation completed successfully.`);
+          parsed.files = validatedParsed.files;
+          parsed.validationReport = validatedParsed.validationReport || "Validated successfully.";
         }
-
-        return res.json({
-          ...parsed,
-          mode: "live"
-        });
-      } else {
-        throw new Error("Invalid response format: files array is missing from AI output.");
+      } catch (vErr) {
+        console.warn("[AI PLATFORM] Step 6 Internal Validation met an error (continuing with baseline generated files):", vErr);
       }
-    }
 
-    if (!isDemoMode) {
-      return res.status(500).json({
-        success: false,
-        provider: "openai",
-        error: "OpenAI API key is missing. Please configure OPENAI_API_KEY.",
-        details: "No OPENAI_API_KEY found in process.env"
+      return res.json({
+        ...parsed,
+        mode: "live"
       });
+    } else {
+      throw new Error("Invalid response format: files array is missing from AI output.");
     }
-
-    // Fallback / Simulated Generation for Demo Mode
-    const simulatedProject = simulateSmartContractGeneration(prompt, blockchain, language, framework, contractType);
-    return res.json({
-      ...simulatedProject,
-      mode: "simulated"
-    });
   } catch (err: any) {
     console.error("Critical error in /api/generate:", err);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       provider: "openai",
-      error: "Failed to generate smart contract workspace",
+      error: err.message || "Failed to generate smart contract workspace",
       details: err.message || String(err)
     });
   }
@@ -435,7 +378,6 @@ Do NOT output markdown wrappers. Return raw, parsing-valid JSON.
 
 // POST /api/edit
 app.post("/api/edit", async (req, res) => {
-  const isDemoMode = req.query.demo === "true" || req.body.demo === true || process.env.DEMO_MODE === "true" || !process.env.OPENAI_API_KEY;
   const { projectId, instruction, files } = req.body;
 
   if (!instruction || !files) {
@@ -490,35 +432,17 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 `;
 
   try {
-    if (process.env.OPENAI_API_KEY) {
-      const result = await AIService.editWorkspace(editingPrompt);
-      return res.json({
-        ...result.data,
-        mode: "live"
-      });
-    }
-
-    if (!isDemoMode) {
-      return res.status(500).json({
-        success: false,
-        provider: "openai",
-        error: "OpenAI API key is missing. Please configure OPENAI_API_KEY.",
-        details: "No OPENAI_API_KEY found in process.env"
-      });
-    }
-
-    // Simulated Edit
-    const simulatedEdit = simulateSmartContractEdit(instruction, files);
+    const result = await AIService.editWorkspace(editingPrompt);
     return res.json({
-      ...simulatedEdit,
-      mode: "simulated"
+      ...result.data,
+      mode: "live"
     });
   } catch (err: any) {
     console.error("Critical error in /api/edit:", err);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       provider: "openai",
-      error: "Failed to edit workspace files",
+      error: err.message || "Failed to edit workspace files",
       details: err.message || String(err)
     });
   }
@@ -526,7 +450,6 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 
 // POST /api/audit
 app.post("/api/audit", async (req, res) => {
-  const isDemoMode = req.query.demo === "true" || req.body.demo === true || process.env.DEMO_MODE === "true" || !process.env.OPENAI_API_KEY;
   const { files } = req.body;
 
   if (!files) {
@@ -564,35 +487,17 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 `;
 
   try {
-    if (process.env.OPENAI_API_KEY) {
-      const result = await AIService.auditWorkspace(auditPrompt);
-      return res.json({
-        ...result.data,
-        mode: "live"
-      });
-    }
-
-    if (!isDemoMode) {
-      return res.status(500).json({
-        success: false,
-        provider: "openai",
-        error: "OpenAI API key is missing. Please configure OPENAI_API_KEY.",
-        details: "No OPENAI_API_KEY found in process.env"
-      });
-    }
-
-    // Simulated Audit
-    const simulatedAudit = simulateSmartContractAudit(files);
+    const result = await AIService.auditWorkspace(auditPrompt);
     return res.json({
-      ...simulatedAudit,
-      mode: "simulated"
+      ...result.data,
+      mode: "live"
     });
   } catch (err: any) {
     console.error("Critical error in /api/audit:", err);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       provider: "openai",
-      error: "Failed to audit workspace files",
+      error: err.message || "Failed to audit workspace files",
       details: err.message || String(err)
     });
   }
@@ -600,7 +505,6 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 
 // POST /api/compile
 app.post("/api/compile", async (req, res) => {
-  const isDemoMode = req.query.demo === "true" || req.body.demo === true || process.env.DEMO_MODE === "true" || !process.env.OPENAI_API_KEY;
   const { blockchain, framework, files } = req.body;
   if (!files || files.length === 0) {
     return res.status(400).json({ error: "No files found to compile" });
@@ -637,84 +541,23 @@ Do NOT output markdown wrappers like \`\`\`json. Return only raw, parsing-valid 
 `;
 
   try {
-    if (process.env.OPENAI_API_KEY) {
-      const result = await AIService.compileAnalysis(compilerPrompt);
-      const parsed = result.data;
-      return res.json({
-        success: parsed.success,
-        errors: parsed.errors || [],
-        logs: parsed.logs || [],
-        timestamp: new Date().toISOString()
-      });
-    }
-
-    if (!isDemoMode) {
-      return res.status(500).json({
-        success: false,
-        provider: "openai",
-        error: "OpenAI API key is missing. Please configure OPENAI_API_KEY.",
-        details: "No OPENAI_API_KEY found in process.env"
-      });
-    }
+    const result = await AIService.compileAnalysis(compilerPrompt);
+    const parsed = result.data;
+    return res.json({
+      success: parsed.success,
+      errors: parsed.errors || [],
+      logs: parsed.logs || [],
+      timestamp: new Date().toISOString()
+    });
   } catch (err: any) {
     console.error("OpenAI compiler validation failed:", err);
-    if (!isDemoMode) {
-      return res.status(500).json({
-        success: false,
-        provider: "openai",
-        error: "Failed to compile workspace files via OpenAI validation",
-        details: err.message || String(err)
-      });
-    }
-  }
-
-  // Generate beautiful simulated compilation logs for Demo Mode
-  const logs: string[] = [];
-  logs.push(`[SYSTEM] Starting compilation engine for ${blockchain}...`);
-  logs.push(`[SYSTEM] Detected framework: ${framework}`);
-  logs.push(`[SYSTEM] Analysing file tree dependencies...`);
-
-  files.forEach((f: any) => {
-    if (f.path.includes("contracts") || f.path.includes("programs") || f.path.includes("sources")) {
-      logs.push(`[COMPILER] Found source unit: ${f.path}`);
-    }
-  });
-
-  // Simulated delay-based logs
-  let success = true;
-
-  // Let's add framework-specific warnings or logs
-  if (blockchain === "ethereum" || blockchain === "base" || blockchain === "polygon") {
-    logs.push(`[COMPILER] Solc version 0.8.20 configured.`);
-    logs.push(`[COMPILER] Running Solc optimizer (runs = 200)...`);
-    logs.push(`[COMPILER] Compiler outputs generated successfully for:`);
-    files.forEach((f: any) => {
-      if (f.path.endsWith(".sol")) {
-        const name = f.path.split("/").pop().replace(".sol", "");
-        logs.push(`  - Artifacts compiled: ${name}.json, ${name}.dbg.json`);
-      }
+    return res.status(500).json({
+      success: false,
+      provider: "openai",
+      error: "Failed to compile workspace files via OpenAI validation",
+      details: err.message || String(err)
     });
-  } else if (blockchain === "solana") {
-    logs.push(`[COMPILER] Running cargo-build-sbf...`);
-    logs.push(`[COMPILER] Building Rust BPF / SBF program targets...`);
-    logs.push(`[COMPILER] Finished release target(s) in 1.45s`);
-    logs.push(`[COMPILER] IDL successfully written to target/idl/escrow.json`);
-  } else if (blockchain === "sui" || blockchain === "aptos") {
-    logs.push(`[COMPILER] Running Move compiler v2...`);
-    logs.push(`[COMPILER] Building Move package...`);
-    logs.push(`[COMPILER] Build successful. Generated bytecode modules.`);
-  } else {
-    logs.push(`[COMPILER] Compilation succeeded.`);
   }
-
-  logs.push(`[SYSTEM] Compilation finished successfully. No severe errors.`);
-
-  res.json({
-    success,
-    errors: [],
-    logs,
-    timestamp: new Date().toISOString()
-  });
 });
 
 // POST /api/deploy
@@ -772,233 +615,6 @@ app.post("/api/deploy", (req, res) => {
     deployment: deploymentRecord
   });
 });
-
-
-// -------------------------------------------------------------
-// HEURISTIC / SIMULATOR GENERATORS
-// -------------------------------------------------------------
-
-function simulateSmartContractGeneration(
-  prompt: string,
-  blockchain: string,
-  language: string,
-  framework: string,
-  contractType: string
-) {
-  // Let's create an highly realistic smart contract based on inputs
-  const name = prompt.split(" ").slice(0, 3).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ").replace(/[^a-zA-Z0-9 ]/g, "") || "SmartContract";
-  const className = name.replace(/\s+/g, "");
-
-  let codeContent = "";
-  let ext = "sol";
-  let folder = "contracts";
-
-  if (blockchain === "solana") {
-    ext = "rs";
-    folder = "programs/src";
-    codeContent = `use anchor_lang::prelude::*;
-
-declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
-
-#[program]
-pub mod ${className.toLowerCase()} {
-    use super::*;
-
-    pub fn initialize(ctx: Context<Initialize>, details: String) -> Result<()> {
-        let state = &mut ctx.accounts.state;
-        state.authority = ctx.accounts.authority.key();
-        state.details = details;
-        state.is_active = true;
-        
-        emit!(StateInitialized {
-            authority: state.authority,
-            details: state.details.clone(),
-        });
-        Ok(())
-    }
-}
-
-#[account]
-pub struct ProgramState {
-    pub authority: Pubkey,
-    pub details: String,
-    pub is_active: bool,
-}
-
-#[derive(Accounts)]
-pub struct Initialize<'info> {
-    #[account(init, payer = authority, space = 8 + 32 + 100 + 1)]
-    pub state: Account<'info, ProgramState>,
-    #[account(mut)]
-    pub authority: Signer<'info>,
-    pub system_program: Program<'info, System>,
-}
-
-#[event]
-pub struct StateInitialized {
-    pub authority: Pubkey,
-    pub details: String,
-}`;
-  } else if (blockchain === "sui" || blockchain === "aptos") {
-    ext = "move";
-    folder = "sources";
-    codeContent = `module project::${className.toLowerCase()} {
-    use sui::object::{Self, UID};
-    use sui::tx_context::{Self, TxContext};
-    use sui::transfer;
-
-    struct State has key, store {
-        id: UID,
-        owner: address,
-        description: vector<u8>,
-        balance: u64,
-    }
-
-    public entry fun initialize(description: vector<u8>, ctx: &mut TxContext) {
-        let sender = tx_context::sender(ctx);
-        let state = State {
-            id: object::new(ctx),
-            owner: sender,
-            description,
-            balance: 0,
-        };
-        transfer::transfer(state, sender);
-    }
-}`;
-  } else {
-    // Solidity default
-    ext = "sol";
-    folder = "contracts";
-    codeContent = `// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
-
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-
-/**
- * @title ${className}
- * @dev Automated compilation candidate for "${prompt}"
- */
-contract ${className} is Ownable, ReentrancyGuard {
-    string public description;
-    bool public isActive;
-
-    event ContractUpdated(string newDescription);
-
-    constructor(string memory _description) Ownable(msg.sender) {
-        description = _description;
-        isActive = true;
-    }
-
-    function updateDescription(string calldata _newDescription) external onlyOwner {
-        require(isActive, "Contract is not active");
-        description = _newDescription;
-        emit ContractUpdated(_newDescription);
-    }
-
-    function toggleActive() external onlyOwner {
-        isActive = !isActive;
-    }
-}`;
-  }
-
-  const safeLang = language || "solidity";
-  const files = [
-    {
-      path: `${folder}/${className}.${ext}`,
-      language: safeLang === "solidity" ? "solidity" : safeLang.includes("rust") ? "rust" : "move",
-      content: codeContent
-    },
-    {
-      path: `test/${className}.test.js`,
-      language: "javascript",
-      content: `const { expect } = require("chai");
-// Simulated unit tests for ${className}`
-    },
-    {
-      path: "README.md",
-      language: "markdown",
-      content: `# ${className} Smart Contract Project\n\nAutomatically generated workspace based on details:\n"${prompt}"\n\n## Architecture\n- Dynamic compilation via ${framework}`
-    }
-  ];
-
-  const audit = {
-    score: 95,
-    codeQuality: 96,
-    gasOptimization: 92,
-    complexity: 3,
-    summary: "The generated smart contract conforms strictly to enterprise development guidelines. No high severity bugs found.",
-    vulnerabilities: [
-      {
-        id: "v-1",
-        title: "Default Initializer Validation Check",
-        severity: "informational",
-        description: "The initialization parameters do not check if description strings are empty.",
-        file: `${folder}/${className}.${ext}`,
-        line: 20,
-        recommendation: "Add a validation statement to ensure inputted parameters are non-zero.",
-        fixAvailable: true
-      }
-    ]
-  };
-
-  return {
-    name: `${className} Platform`,
-    description: `Enterprise smart contract workspace for ${name}. Includes test configurations and full deployment parameters.`,
-    files,
-    audit
-  };
-}
-
-function simulateSmartContractEdit(instruction: string, files: any[]) {
-  // Add simulated edit behavior - e.g. add comments or prepend/append changes
-  let summary = `Applied instruction: "${instruction}" across files.`;
-  const updatedFiles = files.map((file) => {
-    if (file.path.endsWith(".sol")) {
-      summary += ` Added custom modules to ${file.path}.`;
-      return {
-        ...file,
-        content: `// Added via edit: "${instruction}"\n` + file.content
-      };
-    }
-    return file;
-  });
-
-  return {
-    files: updatedFiles,
-    summary,
-    audit: {
-      score: 98,
-      codeQuality: 98,
-      gasOptimization: 95,
-      complexity: 3,
-      summary: `Successful adaptation of the smart contract according to request: "${instruction}". Verified code structure and gas execution bounds.`,
-      vulnerabilities: []
-    }
-  };
-}
-
-function simulateSmartContractAudit(files: any[]) {
-  return {
-    score: 92,
-    codeQuality: 94,
-    gasOptimization: 88,
-    complexity: 4,
-    summary: "Comprehensive audit successfully finished across all workspace modules. Two low-priority findings identified.",
-    vulnerabilities: [
-      {
-        id: "vuln-sim-1",
-        title: "Unbounded Loop Warning",
-        severity: "medium",
-        description: "A loop could potentially run out of gas if array sizes scale without bounds.",
-        file: files[0]?.path || "contracts/Contract.sol",
-        line: 45,
-        recommendation: "Introduce a pagination mechanic or enforce strict length validation boundaries.",
-        fixAvailable: false
-      }
-    ]
-  };
-}
 
 
 // -------------------------------------------------------------

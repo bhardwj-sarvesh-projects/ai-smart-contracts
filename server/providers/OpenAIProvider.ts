@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TIMEOUT } from "../../src/config/openai";
 
 export interface AIResponse {
   text: string;
@@ -23,28 +24,14 @@ export interface AIProvider {
 
 export class OpenAIProvider implements AIProvider {
   readonly name = "openai";
-  private client: OpenAI | null = null;
-  private defaultModel = "gpt-4o"; // Safe stable default for enterprise generation
+  private client: OpenAI;
 
   constructor() {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (apiKey) {
-      try {
-        this.client = new OpenAI({
-          apiKey,
-          timeout: 60000, // 60s timeout
-        });
-        console.log("[OPENAI PROVIDER] OpenAI client successfully initialized.");
-      } catch (err) {
-        console.error("[OPENAI PROVIDER] Failed to initialize OpenAI client:", err);
-      }
-    } else {
-      console.warn("[OPENAI PROVIDER] No OPENAI_API_KEY found in process.env.");
-    }
-  }
-
-  private getModel(): string {
-    return process.env.AI_MODEL || this.defaultModel;
+    this.client = new OpenAI({
+      apiKey: OPENAI_API_KEY,
+      timeout: OPENAI_TIMEOUT
+    });
+    console.log("[OPENAI PROVIDER] OpenAI client successfully initialized using central config.");
   }
 
   // Centred robust request executor with exponential backoff retry and tracking
@@ -55,20 +42,19 @@ export class OpenAIProvider implements AIProvider {
     retries: number = 3,
     baseDelayMs: number = 1000
   ): Promise<AIResponse> {
-    if (!this.client) {
-      throw new Error("OpenAI API client is not initialized. Please configure OPENAI_API_KEY.");
-    }
-
-    const model = this.getModel();
     const startTime = Date.now();
     let lastError: any = null;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        console.log(`[OPENAI PROVIDER] Requesting ${model} (Attempt ${attempt}/${retries}) - MIME Type: ${responseMimeType}`);
+        // Step 8: Improve logging
+        console.log("--------------------------------");
+        console.log("Provider: OpenAI");
+        console.log(`Model: ${OPENAI_MODEL}`);
+        console.log("--------------------------------");
         
         const response = await this.client.chat.completions.create({
-          model,
+          model: OPENAI_MODEL,
           messages: [
             ...(systemInstruction ? [{ role: "system" as const, content: systemInstruction }] : []),
             { role: "user" as const, content: prompt }
@@ -80,16 +66,24 @@ export class OpenAIProvider implements AIProvider {
         const text = response.choices[0]?.message?.content || "";
         const durationMs = Date.now() - startTime;
 
-        console.log(`[OPENAI PROVIDER] Success in ${durationMs}ms. Usage: ${JSON.stringify(response.usage || {})}`);
+        const promptTokens = response.usage?.prompt_tokens ?? 0;
+        const completionTokens = response.usage?.completion_tokens ?? 0;
+        const totalTokens = response.usage?.total_tokens ?? 0;
+
+        // Step 8: Print latency and tokens after request
+        console.log(`Latency: ${durationMs}ms`);
+        console.log(`Prompt Tokens: ${promptTokens}`);
+        console.log(`Completion Tokens: ${completionTokens}`);
+        console.log(`Total Tokens: ${totalTokens}`);
 
         return {
           text,
-          model,
+          model: OPENAI_MODEL,
           durationMs,
           usage: response.usage ? {
-            promptTokens: response.usage.prompt_tokens,
-            completionTokens: response.usage.completion_tokens,
-            totalTokens: response.usage.total_tokens
+            promptTokens,
+            completionTokens,
+            totalTokens
           } : undefined
         };
       } catch (err: any) {
@@ -127,31 +121,22 @@ export class OpenAIProvider implements AIProvider {
 
   async healthCheck(): Promise<{ success: boolean; latencyMs: number; modelUsed: string; error?: string }> {
     const startTime = Date.now();
-    if (!this.client) {
-      return {
-        success: false,
-        latencyMs: 0,
-        modelUsed: this.getModel(),
-        error: "Client not initialized due to missing OPENAI_API_KEY."
-      };
-    }
-
     try {
       await this.client.chat.completions.create({
-        model: this.getModel(),
+        model: OPENAI_MODEL,
         messages: [{ role: "user" as const, content: "ping" }],
         max_tokens: 5
       });
       return {
         success: true,
         latencyMs: Date.now() - startTime,
-        modelUsed: this.getModel()
+        modelUsed: OPENAI_MODEL
       };
     } catch (err: any) {
       return {
         success: false,
         latencyMs: Date.now() - startTime,
-        modelUsed: this.getModel(),
+        modelUsed: OPENAI_MODEL,
         error: err.message || "Failed to call chat.completions."
       };
     }
