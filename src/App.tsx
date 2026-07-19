@@ -287,15 +287,16 @@ export default function App() {
       });
 
       if (!response.ok) {
-        throw new Error('AI Plan generation failed');
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || 'AI Plan generation failed');
       }
 
       const planData = await response.json();
       setActivePlan(planData);
       setPendingConfig(configData);
-    } catch (err) {
-      console.error('Failed to generate pre-plan, running failsafe bypass...', err);
-      await handleApproveAndGeneratePlan(null, configData);
+    } catch (err: any) {
+      console.error('Failed to generate pre-plan', err);
+      alert(`AI Plan Generation Failed: ${err.message || String(err)}`);
     } finally {
       setIsProcessing(false);
     }
@@ -326,7 +327,8 @@ export default function App() {
       });
 
       if (!response.ok) {
-        throw new Error('AI Generation service failed');
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || 'AI Generation service failed');
       }
 
       const aiGenerated = await response.json();
@@ -364,49 +366,9 @@ export default function App() {
       setProjects((prev) => [...prev, newProj]);
       setActiveProjectId(newProj.id);
       setActiveTab('workspace');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to generate smart contract project', err);
-      
-      const fallbackProjectName = config.name || 'Fallback Workspace';
-      const cleanClassName = fallbackProjectName.replace(/\s+/g, '').replace(/[^a-zA-Z0-9]/g, '') || 'SmartContract';
-      const localFallbackProj = {
-        id: `project-fallback-${Date.now()}`,
-        name: fallbackProjectName,
-        description: config.description || `Custom ${config.contractType || 'smart contract'} workspace on ${config.blockchain}.`,
-        blockchain: config.blockchain,
-        language: config.language,
-        framework: config.framework || 'Default',
-        contractType: config.contractType || 'Custom Contract',
-        activeFilePath: 'contracts/Contract.sol',
-        createdAt: new Date().toISOString(),
-        files: [
-          {
-            path: 'contracts/Contract.sol',
-            language: 'solidity',
-            content: `// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\ncontract ${cleanClassName} {\n    string public name = "${fallbackProjectName}";\n    address public owner;\n\n    constructor() {\n        owner = msg.sender;\n    }\n}`
-          },
-          {
-            path: 'README.md',
-            language: 'markdown',
-            content: `# ${fallbackProjectName}\n\nClient-side fallback workspace created due to connectivity issues.`
-          }
-        ],
-        audit: {
-          score: 95,
-          codeQuality: 98,
-          gasOptimization: 90,
-          complexity: 1,
-          summary: "Local client-side fallback generated successfully.",
-          vulnerabilities: []
-        },
-        deployments: [],
-        versions: []
-      };
-
-      setProjects((prev) => [...prev, localFallbackProj]);
-      setActiveProjectId(localFallbackProj.id);
-      setActiveTab('workspace');
-      alert('AI Generation service failed. Running with simulated fallback creation to ensure your workspace is active.');
+      alert(`AI Generation Failed: ${err.message || String(err)}`);
     } finally {
       setIsProcessing(false);
       setPendingConfig(null);
@@ -484,40 +446,18 @@ export default function App() {
         })
       });
 
-      if (!createRes.ok) throw new Error('Clone creation failed');
+      if (!createRes.ok) {
+        const errData = await createRes.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || 'Clone creation failed');
+      }
 
       const newProj = await createRes.json();
       setProjects((prev) => [...prev, newProj]);
       setActiveProjectId(newProj.id);
       setActiveTab('workspace');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to clone template', err);
-      // Fallback
-      const fallbackProj = {
-        id: `template-clone-${Date.now()}`,
-        name: `${templateName} Clone`,
-        description: `Custom workspace cloned from template blueprint: ${templateName}`,
-        blockchain,
-        language,
-        framework: 'Hardhat',
-        contractType: templateName,
-        activeFilePath: files[0]?.path || 'contracts/Contract.sol',
-        createdAt: new Date().toISOString(),
-        files,
-        audit: {
-          score: 98,
-          codeQuality: 98,
-          gasOptimization: 95,
-          complexity: 2,
-          summary: "Successfully cloned blueprint template workspace locally.",
-          vulnerabilities: []
-        },
-        deployments: [],
-        versions: []
-      };
-      setProjects((prev) => [...prev, fallbackProj]);
-      setActiveProjectId(fallbackProj.id);
-      setActiveTab('workspace');
+      alert(`Failed to clone template: ${err.message || String(err)}`);
     } finally {
       setIsProcessing(false);
     }

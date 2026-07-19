@@ -55,20 +55,40 @@ function writeDb(data: any) {
 app.get("/api/health", async (req, res) => {
   try {
     const result = await AIService.healthCheck();
-    res.json({
-      status: result.success ? "ok" : "error",
-      provider: "openai",
-      model: OPENAI_MODEL,
-      latency: result.latencyMs,
-      success: result.success
+    if (result.success) {
+      return res.json({
+        provider: "openai",
+        model: OPENAI_MODEL,
+        connected: true,
+        success: true
+      });
+    } else {
+      return res.json({
+        connected: false,
+        error: result.error || "Failed to connect to OpenAI service"
+      });
+    }
+  } catch (err: any) {
+    return res.json({
+      connected: false,
+      error: err.message || String(err)
+    });
+  }
+});
+
+// Test OpenAI Route
+app.get("/api/test-openai", async (req, res) => {
+  try {
+    const rawResponse = await AIService.testOpenAI();
+    return res.json({
+      success: true,
+      response: rawResponse
     });
   } catch (err: any) {
-    res.json({
-      status: "error",
-      provider: "openai",
-      model: OPENAI_MODEL,
-      latency: 0,
-      success: false
+    return res.status(500).json({
+      success: false,
+      error: err.message || String(err),
+      stack: err.stack || "No stack trace available"
     });
   }
 });
@@ -211,9 +231,8 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
     console.error("Plan endpoint error:", err);
     return res.status(500).json({
       success: false,
-      provider: "openai",
-      error: err.message || "Failed to generate plan",
-      details: err.message || String(err)
+      error: err.message || String(err),
+      stack: err.stack || "No stack trace available"
     });
   }
 });
@@ -369,9 +388,8 @@ Do NOT output markdown wrappers. Return raw, parsing-valid JSON.
     console.error("Critical error in /api/generate:", err);
     return res.status(500).json({
       success: false,
-      provider: "openai",
-      error: err.message || "Failed to generate smart contract workspace",
-      details: err.message || String(err)
+      error: err.message || String(err),
+      stack: err.stack || "No stack trace available"
     });
   }
 });
@@ -441,9 +459,8 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
     console.error("Critical error in /api/edit:", err);
     return res.status(500).json({
       success: false,
-      provider: "openai",
-      error: err.message || "Failed to edit workspace files",
-      details: err.message || String(err)
+      error: err.message || String(err),
+      stack: err.stack || "No stack trace available"
     });
   }
 });
@@ -496,9 +513,8 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
     console.error("Critical error in /api/audit:", err);
     return res.status(500).json({
       success: false,
-      provider: "openai",
-      error: err.message || "Failed to audit workspace files",
-      details: err.message || String(err)
+      error: err.message || String(err),
+      stack: err.stack || "No stack trace available"
     });
   }
 });
@@ -553,9 +569,8 @@ Do NOT output markdown wrappers like \`\`\`json. Return only raw, parsing-valid 
     console.error("OpenAI compiler validation failed:", err);
     return res.status(500).json({
       success: false,
-      provider: "openai",
-      error: "Failed to compile workspace files via OpenAI validation",
-      details: err.message || String(err)
+      error: err.message || String(err),
+      stack: err.stack || "No stack trace available"
     });
   }
 });

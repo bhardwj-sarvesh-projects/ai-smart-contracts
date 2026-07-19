@@ -92,6 +92,10 @@ export class AIService {
     return this.provider.healthCheck();
   }
 
+  static async testOpenAI() {
+    return this.provider.testOpenAI();
+  }
+
   static getProviderName(): string {
     return this.provider.name;
   }

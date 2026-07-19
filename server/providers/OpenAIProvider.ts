@@ -20,6 +20,7 @@ export interface AIProvider {
   plan(prompt: string, systemInstruction?: string): Promise<AIResponse>;
   compileAnalysis(prompt: string, systemInstruction?: string): Promise<AIResponse>;
   healthCheck(): Promise<{ success: boolean; latencyMs: number; modelUsed: string; error?: string }>;
+  testOpenAI(): Promise<any>;
 }
 
 export class OpenAIProvider implements AIProvider {
@@ -39,6 +40,7 @@ export class OpenAIProvider implements AIProvider {
     prompt: string,
     systemInstruction: string = "",
     responseMimeType: string = "text/plain",
+    route: string = "unknown",
     retries: number = 3,
     baseDelayMs: number = 1000
   ): Promise<AIResponse> {
@@ -47,10 +49,12 @@ export class OpenAIProvider implements AIProvider {
 
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        // Step 8: Improve logging
+        // Step 4: Detailed Logging before request
         console.log("--------------------------------");
-        console.log("Provider: OpenAI");
+        console.log("OPENAI REQUEST");
         console.log(`Model: ${OPENAI_MODEL}`);
+        console.log(`Route: ${route}`);
+        console.log(`Prompt Length: ${prompt.length + (systemInstruction ? systemInstruction.length : 0)}`);
         console.log("--------------------------------");
         
         const response = await this.client.chat.completions.create({
@@ -70,11 +74,11 @@ export class OpenAIProvider implements AIProvider {
         const completionTokens = response.usage?.completion_tokens ?? 0;
         const totalTokens = response.usage?.total_tokens ?? 0;
 
-        // Step 8: Print latency and tokens after request
-        console.log(`Latency: ${durationMs}ms`);
+        // Step 4: Detailed Logging after success
         console.log(`Prompt Tokens: ${promptTokens}`);
         console.log(`Completion Tokens: ${completionTokens}`);
         console.log(`Total Tokens: ${totalTokens}`);
+        console.log(`Latency: ${durationMs}ms`);
 
         return {
           text,
@@ -88,6 +92,16 @@ export class OpenAIProvider implements AIProvider {
         };
       } catch (err: any) {
         lastError = err;
+        
+        // Step 4: Detailed Logging on failure
+        console.error("--------------------------------");
+        console.error("OPENAI FAILURE DETAILS");
+        console.error("Full OpenAI error:", err);
+        console.error("HTTP status:", err.status || "N/A");
+        console.error("Error code:", err.code || "N/A");
+        console.error("Stack trace:", err.stack || "N/A");
+        console.error("--------------------------------");
+
         console.warn(`[OPENAI PROVIDER] Attempt ${attempt} failed:`, err.message || err);
         if (attempt < retries) {
           const delay = baseDelayMs * Math.pow(2, attempt - 1);
@@ -100,23 +114,23 @@ export class OpenAIProvider implements AIProvider {
   }
 
   async generate(prompt: string, systemInstruction?: string, responseMimeType?: string): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, responseMimeType || "application/json");
+    return this.executeWithRetry(prompt, systemInstruction, responseMimeType || "application/json", "/api/generate");
   }
 
   async edit(prompt: string, systemInstruction?: string): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json");
+    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/edit");
   }
 
   async audit(prompt: string, systemInstruction?: string): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json");
+    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/audit");
   }
 
   async plan(prompt: string, systemInstruction?: string): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json");
+    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/generate-plan");
   }
 
   async compileAnalysis(prompt: string, systemInstruction?: string): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json");
+    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/compile");
   }
 
   async healthCheck(): Promise<{ success: boolean; latencyMs: number; modelUsed: string; error?: string }> {
@@ -139,6 +153,48 @@ export class OpenAIProvider implements AIProvider {
         modelUsed: OPENAI_MODEL,
         error: err.message || "Failed to call chat.completions."
       };
+    }
+  }
+
+  async testOpenAI(): Promise<any> {
+    const startTime = Date.now();
+    // Step 4: Detailed Logging before request
+    console.log("--------------------------------");
+    console.log("OPENAI REQUEST");
+    console.log(`Model: ${OPENAI_MODEL}`);
+    console.log("Route: /api/test-openai");
+    console.log("Prompt Length: 17");
+    console.log("--------------------------------");
+
+    try {
+      const response = await this.client.chat.completions.create({
+        model: OPENAI_MODEL,
+        messages: [{ role: "user" as const, content: "Reply only with OK" }],
+        temperature: 0.0
+      });
+
+      const durationMs = Date.now() - startTime;
+      const promptTokens = response.usage?.prompt_tokens ?? 0;
+      const completionTokens = response.usage?.completion_tokens ?? 0;
+      const totalTokens = response.usage?.total_tokens ?? 0;
+
+      // Step 4: Detailed Logging after success
+      console.log(`Prompt Tokens: ${promptTokens}`);
+      console.log(`Completion Tokens: ${completionTokens}`);
+      console.log(`Total Tokens: ${totalTokens}`);
+      console.log(`Latency: ${durationMs}ms`);
+
+      return response;
+    } catch (err: any) {
+      // Step 4: Detailed Logging on failure
+      console.error("--------------------------------");
+      console.error("OPENAI FAILURE DETAILS");
+      console.error("Full OpenAI error:", err);
+      console.error("HTTP status:", err.status || "N/A");
+      console.error("Error code:", err.code || "N/A");
+      console.error("Stack trace:", err.stack || "N/A");
+      console.error("--------------------------------");
+      throw err;
     }
   }
 }
