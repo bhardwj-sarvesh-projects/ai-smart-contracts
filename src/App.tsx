@@ -11,7 +11,7 @@ import PipelineDashboard from './components/PipelineDashboard';
 import DashboardView from './components/DashboardView';
 import AuditingHub from './components/AuditingHub';
 import { Project, ProjectFile, Vulnerability, Version } from './types';
-import { Layers, Sparkles, RefreshCw, AlertCircle, Library } from 'lucide-react';
+import { Layers, Sparkles, RefreshCw, AlertCircle, Library, FolderOpen, Code2 } from 'lucide-react';
 import JSZip from 'jszip';
 import AuthView from './components/AuthView';
 import SettingsModal from './components/SettingsModal';
@@ -35,6 +35,7 @@ export default function App() {
   const [showTemplateLibrary, setShowTemplateLibrary] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [activeWorkspaceSubTab, setActiveWorkspaceSubTab] = useState<'files' | 'editor' | 'assistant'>('editor');
 
   // Plan generation state
   const [activePlan, setActivePlan] = useState<any>(null);
@@ -815,75 +816,131 @@ export default function App() {
       ) : (
         /* Workspace View (with fallback empty splash state) */
         activeProject ? (
-          <div className="flex-1 flex min-h-0 relative">
+          <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
             
-            {/* Left Sidebar (File Explorer / Version History Switcher) */}
-            <div className={`w-64 flex-shrink-0 border-r flex flex-col min-h-0 ${theme === 'dark' ? 'border-slate-800 bg-slate-950' : 'border-slate-200 bg-white'}`}>
-              {showVersionHistory ? (
-                <VersionHistory
-                  versions={activeProject.versions || []}
-                  onRestore={handleRestoreVersion}
-                  onDuplicate={handleDuplicateVersion}
-                  onRenamePrompt={handleRenameVersionPrompt}
-                  onDeleteVersion={handleDeleteVersion}
-                />
-              ) : (
-                <FileTree
-                  files={activeProject.files}
-                  activeFilePath={activeProject.activeFilePath}
-                  onSelectFile={handleSelectFile}
-                  onAddFile={handleAddFile}
-                  onDeleteFile={handleDeleteFile}
-                />
-              )}
+            {/* Mobile Workspace Sub-navigation Tab Bar (Only visible below lg breakpoint) */}
+            <div className={`lg:hidden flex items-center justify-around border-b py-2 px-4 shrink-0 font-sans select-none ${
+              theme === 'dark' ? 'bg-slate-950 border-slate-900 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600'
+            }`}>
+              <button
+                onClick={() => setActiveWorkspaceSubTab('files')}
+                className={`flex items-center gap-1.5 text-xs font-bold py-2 px-3 rounded-xl transition-all cursor-pointer ${
+                  activeWorkspaceSubTab === 'files'
+                    ? theme === 'dark' 
+                      ? 'bg-slate-900 text-cyan-400 shadow-inner' 
+                      : 'bg-white text-cyan-600 border border-slate-200 shadow-sm'
+                    : 'hover:text-slate-200 hover:bg-slate-900/10'
+                }`}
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                Files
+              </button>
+              <button
+                onClick={() => setActiveWorkspaceSubTab('editor')}
+                className={`flex items-center gap-1.5 text-xs font-bold py-2 px-3 rounded-xl transition-all cursor-pointer ${
+                  activeWorkspaceSubTab === 'editor'
+                    ? theme === 'dark' 
+                      ? 'bg-slate-900 text-cyan-400 shadow-inner' 
+                      : 'bg-white text-cyan-600 border border-slate-200 shadow-sm'
+                    : 'hover:text-slate-200 hover:bg-slate-900/10'
+                }`}
+              >
+                <Code2 className="w-3.5 h-3.5" />
+                Editor
+              </button>
+              <button
+                onClick={() => setActiveWorkspaceSubTab('assistant')}
+                className={`flex items-center gap-1.5 text-xs font-bold py-2 px-3 rounded-xl transition-all cursor-pointer ${
+                  activeWorkspaceSubTab === 'assistant'
+                    ? theme === 'dark' 
+                      ? 'bg-slate-900 text-cyan-400 shadow-inner' 
+                      : 'bg-white text-cyan-600 border border-slate-200 shadow-sm'
+                    : 'hover:text-slate-200 hover:bg-slate-900/10'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Assistant
+              </button>
             </div>
 
-            {/* Central Workspace (Editor + Pipeline Assembly Controller) */}
-            <div className="flex-1 flex flex-col min-w-0">
-              {/* Upper Editor Workspace */}
-              <div className="flex-1 min-h-0">
-                <CodeWorkspace
+            {/* Inner Columns Layout */}
+            <div className="flex-1 flex flex-col lg:flex-row min-h-0 relative overflow-hidden">
+              
+              {/* Left Sidebar (File Explorer / Version History Switcher) */}
+              <div className={`w-full lg:w-64 flex-shrink-0 border-r flex-col min-h-0 ${
+                activeWorkspaceSubTab === 'files' ? 'flex' : 'hidden lg:flex'
+              } ${theme === 'dark' ? 'border-slate-800 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+                {showVersionHistory ? (
+                  <VersionHistory
+                    versions={activeProject.versions || []}
+                    onRestore={handleRestoreVersion}
+                    onDuplicate={handleDuplicateVersion}
+                    onRenamePrompt={handleRenameVersionPrompt}
+                    onDeleteVersion={handleDeleteVersion}
+                  />
+                ) : (
+                  <FileTree
+                    files={activeProject.files}
+                    activeFilePath={activeProject.activeFilePath}
+                    onSelectFile={handleSelectFile}
+                    onAddFile={handleAddFile}
+                    onDeleteFile={handleDeleteFile}
+                  />
+                )}
+              </div>
+
+              {/* Central Workspace (Editor + Pipeline Assembly Controller) */}
+              <div className={`flex-1 flex-col min-w-0 ${
+                activeWorkspaceSubTab === 'editor' ? 'flex' : 'hidden lg:flex'
+              }`}>
+                {/* Upper Editor Workspace */}
+                <div className="flex-1 min-h-0">
+                  <CodeWorkspace
+                    files={activeProject.files}
+                    activeFilePath={activeProject.activeFilePath}
+                    onFileContentChange={handleFileContentChange}
+                    onSelectFile={handleSelectFile}
+                  />
+                </div>
+
+                {/* Advanced 10-stage deployment compiler pipeline replacement */}
+                <div className="h-72 flex-shrink-0">
+                  <PipelineDashboard
+                    project={activeProject}
+                    onUpdateFiles={(newFiles) => {
+                      const updated = { ...activeProject, files: newFiles };
+                      setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
+                      authedFetch(`/api/projects/${activeProject.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(updated)
+                      });
+                    }}
+                    onCompile={handleCompile}
+                    onDeploy={handleDeploy}
+                    isCompiling={isCompiling}
+                    isDeploying={isDeploying}
+                  />
+                </div>
+              </div>
+
+              {/* Right Assistant (Copilot refactoring + Security Auditor panel) */}
+              <div className={`w-full lg:w-80 flex-shrink-0 flex-col min-h-0 ${
+                activeWorkspaceSubTab === 'assistant' ? 'flex' : 'hidden lg:flex'
+              }`}>
+                <RightAssistant
+                  auditResult={activeProject.audit}
                   files={activeProject.files}
-                  activeFilePath={activeProject.activeFilePath}
-                  onFileContentChange={handleFileContentChange}
-                  onSelectFile={handleSelectFile}
+                  onApplyAIFix={handleApplyAIFix}
+                  onEditContract={handleEditContract}
+                  isProcessing={isProcessing}
+                  activeProvider={activeProvider}
+                  setActiveProvider={setActiveProvider}
+                  activeModel={activeModel}
+                  setActiveModel={setActiveModel}
                 />
               </div>
 
-              {/* Advanced 10-stage deployment compiler pipeline replacement */}
-              <div className="h-72 flex-shrink-0">
-                <PipelineDashboard
-                  project={activeProject}
-                  onUpdateFiles={(newFiles) => {
-                    const updated = { ...activeProject, files: newFiles };
-                    setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
-                    authedFetch(`/api/projects/${activeProject.id}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(updated)
-                    });
-                  }}
-                  onCompile={handleCompile}
-                  onDeploy={handleDeploy}
-                  isCompiling={isCompiling}
-                  isDeploying={isDeploying}
-                />
-              </div>
-            </div>
-
-            {/* Right Assistant (Copilot refactoring + Security Auditor panel) */}
-            <div className="w-80 flex-shrink-0">
-              <RightAssistant
-                auditResult={activeProject.audit}
-                files={activeProject.files}
-                onApplyAIFix={handleApplyAIFix}
-                onEditContract={handleEditContract}
-                isProcessing={isProcessing}
-                activeProvider={activeProvider}
-                setActiveProvider={setActiveProvider}
-                activeModel={activeModel}
-                setActiveModel={setActiveModel}
-              />
             </div>
           </div>
         ) : (
