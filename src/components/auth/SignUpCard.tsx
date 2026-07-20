@@ -9,11 +9,11 @@ interface SignUpCardProps {
 }
 
 const SECURITY_QUESTIONS = [
-  "What is your favourite teacher's name?",
-  "What is your first school?",
-  "What is your favourite city?",
-  "What is your favourite food?",
-  "What is your dream company?"
+  "What is your childhood best friend's name?",
+  "What was your childhood nickname?",
+  "What is your mother's maiden name?",
+  "What is the name of your first pet?",
+  "In what city or town did your parents meet?"
 ];
 
 export default function SignUpCard({
