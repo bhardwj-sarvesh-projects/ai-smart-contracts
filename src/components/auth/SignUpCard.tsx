@@ -1,18 +1,24 @@
 import React, { useState } from 'react';
-import { Mail, Lock, Eye, EyeOff, Cpu, ArrowRight, User } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, Cpu, ArrowRight, User, HelpCircle } from 'lucide-react';
 
 interface SignUpCardProps {
   onNavigate: (view: 'login') => void;
-  onSignUp: (email: string, password: string, fullName: string) => Promise<void>;
-  onGoogleLogin: () => void;
+  onSignUp: (email: string, password: string, fullName: string, securityQuestion: string, securityAnswer: string) => Promise<void>;
   isAuthenticating: boolean;
   error: string | null;
 }
 
+const SECURITY_QUESTIONS = [
+  "What is your favourite teacher's name?",
+  "What is your first school?",
+  "What is your favourite city?",
+  "What is your favourite food?",
+  "What is your dream company?"
+];
+
 export default function SignUpCard({
   onNavigate,
   onSignUp,
-  onGoogleLogin,
   isAuthenticating,
   error: apiError,
 }: SignUpCardProps) {
@@ -20,6 +26,8 @@ export default function SignUpCard({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [securityQuestion, setSecurityQuestion] = useState(SECURITY_QUESTIONS[0]);
+  const [securityAnswer, setSecurityAnswer] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -29,6 +37,7 @@ export default function SignUpCard({
     email?: string;
     password?: string;
     confirmPassword?: string;
+    securityAnswer?: string;
     agreeTerms?: string;
   }>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -51,6 +60,9 @@ export default function SignUpCard({
     if (confirmPassword !== password) {
       newErrors.confirmPassword = 'Passwords do not match';
     }
+    if (!securityAnswer.trim()) {
+      newErrors.securityAnswer = 'Security answer is required';
+    }
     if (!agreeTerms) {
       newErrors.agreeTerms = 'You must agree to the Terms of Service';
     }
@@ -64,7 +76,7 @@ export default function SignUpCard({
 
     setIsSubmitting(true);
     try {
-      await onSignUp(email, password, name);
+      await onSignUp(email, password, name, securityQuestion, securityAnswer);
     } catch (err) {
       // Handled in parent state
     } finally {
@@ -76,17 +88,17 @@ export default function SignUpCard({
     <div className="w-full bg-white border border-slate-200/80 rounded-3xl p-8 md:p-10 shadow-[0_20px_50px_rgba(0,0,0,0.04)] relative overflow-hidden">
       {/* Decorative Brand Header */}
       <div className="flex flex-col items-center text-center mb-8">
-        <div className="p-3 bg-blue-50 rounded-2xl border border-blue-100 text-blue-600 mb-4 shadow-sm">
-          <Cpu size={28} className="animate-pulse" />
+        <div className="mb-4">
+          <img src="https://blockonmate.com/blockonmate-logo.png" alt="BlockOnMate Logo" className="h-14 w-auto drop-shadow-md" referrerPolicy="no-referrer" />
         </div>
         <span className="px-2.5 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider text-blue-600 bg-blue-50 rounded-full border border-blue-100 mb-2">
-          SaaS Studio
+          AI Contracts
         </span>
         <h2 className="text-2xl font-bold font-sans text-slate-900 tracking-tight">
           Create an account
         </h2>
         <p className="text-sm text-slate-500 mt-1 max-w-xs">
-          Get started with your SmartContract.ai Studio workspace
+          Powered by BlockOnMate
         </p>
       </div>
 
@@ -209,6 +221,53 @@ export default function SignUpCard({
           )}
         </div>
 
+        {/* Security Question dropdown */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+            Security Question (For Password Recovery)
+          </label>
+          <div className="relative">
+            <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 pointer-events-none">
+              <HelpCircle size={18} />
+            </span>
+            <select
+              value={securityQuestion}
+              onChange={(e) => setSecurityQuestion(e.target.value)}
+              className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 text-slate-900 rounded-2xl text-sm focus:outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-500 transition-all cursor-pointer"
+            >
+              {SECURITY_QUESTIONS.map((q, i) => (
+                <option key={i} value={q}>{q}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Security Answer input */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+            Security Question Answer
+          </label>
+          <div className="relative">
+            <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 pointer-events-none">
+              <HelpCircle size={18} />
+            </span>
+            <input
+              type="text"
+              value={securityAnswer}
+              onChange={(e) => setSecurityAnswer(e.target.value)}
+              className={`w-full pl-11 pr-4 py-3 bg-slate-50 border ${
+                errors.securityAnswer ? 'border-red-400 focus:ring-red-100 focus:border-red-500' : 'border-slate-200 focus:ring-blue-100 focus:border-blue-500'
+              } text-slate-900 rounded-2xl text-sm placeholder-slate-400 focus:outline-none focus:ring-4 transition-all`}
+              placeholder="Your answer (case insensitive)"
+            />
+          </div>
+          {errors.securityAnswer && (
+            <p className="text-xs text-red-500 mt-1 font-medium flex items-center gap-1">
+              <span>●</span> {errors.securityAnswer}
+            </p>
+          )}
+        </div>
+
         {/* Terms and Conditions Checkbox */}
         <div className="pt-1">
           <label className="flex items-start gap-2.5 cursor-pointer group">
@@ -265,31 +324,6 @@ export default function SignUpCard({
           )}
         </button>
       </form>
-
-      {/* Social Divider */}
-      <div className="relative my-6">
-        <div className="absolute inset-0 flex items-center">
-          <div className="w-full border-t border-slate-100" />
-        </div>
-        <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-white px-3.5 text-slate-400 font-semibold tracking-wider">
-            Or sign up with
-          </span>
-        </div>
-      </div>
-
-      {/* Google Sign In */}
-      <button
-        type="button"
-        onClick={onGoogleLogin}
-        disabled={isAuthenticating || isSubmitting}
-        className="w-full flex items-center justify-center gap-3 px-5 py-3.5 bg-slate-50 hover:bg-slate-100/80 text-slate-700 font-semibold text-sm rounded-2xl border border-slate-200/80 focus:outline-none focus:ring-4 focus:ring-slate-100 transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
-      >
-        <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-          <path d="M12.24 10.285V13.4h6.887C18.2 15.614 15.645 18 12.24 18c-3.86 0-7-3.14-7-7s3.14-7 7-7c1.7 0 3.25.61 4.47 1.61L19.1 3.2C17.21 1.45 14.81.4 12.24.4 5.83.4.63 5.6.63 12s5.2 11.6 11.61 11.6c6.68 0 11.13-4.7 11.13-11.34 0-.76-.08-1.33-.23-1.98H12.24z" />
-        </svg>
-        Sign up with Google
-      </button>
 
       {/* Switch to Sign In */}
       <div className="mt-8 text-center text-sm text-slate-500 font-medium">

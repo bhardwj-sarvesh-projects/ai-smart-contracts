@@ -14,6 +14,8 @@ export interface UserConfig {
   maxTokens: number;
   createdDate: string;
   updatedDate: string;
+  role?: string;
+  isActive?: boolean;
 }
 
 const USERS_DB_PATH = path.join(process.cwd(), "data", "users.json");
@@ -49,6 +51,24 @@ export class SettingsService {
     const all = this.readAll();
     const user = all[userId] || null;
     return user;
+  }
+
+  static getAllConfigs(): Record<string, UserConfig> {
+    return this.readAll();
+  }
+
+  static updateRoleAndStatus(userId: string, update: { role?: string; isActive?: boolean }): UserConfig | null {
+    const all = this.readAll();
+    const user = all[userId];
+    if (!user) return null;
+
+    all[userId] = {
+      ...user,
+      ...update,
+      updatedDate: new Date().toISOString()
+    } as UserConfig;
+    this.writeAll(all);
+    return all[userId];
   }
 
   // Get user with decrypted API key (only for backend use)

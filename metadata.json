@@ -1,5 +1,5 @@
 {
-  "name": "AI Smart Contract Development Platform",
+  "name": "AI Contracts",
   "description": "An enterprise-grade platform to generate, edit, audit, test, deploy, and manage smart contracts using natural language.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

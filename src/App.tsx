@@ -10,6 +10,7 @@ import VersionHistory from './components/VersionHistory';
 import PipelineDashboard from './components/PipelineDashboard';
 import DashboardView from './components/DashboardView';
 import AuditingHub from './components/AuditingHub';
+import AdminDashboard from './components/AdminDashboard';
 import { Project, ProjectFile, Vulnerability, Version } from './types';
 import { Layers, Sparkles, RefreshCw, AlertCircle, Library, FolderOpen, Code2 } from 'lucide-react';
 import JSZip from 'jszip';
@@ -29,7 +30,7 @@ export default function App() {
   }
 
   // Active Main Tab/View State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'workspace' | 'auditing'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'workspace' | 'auditing' | 'admin'>('dashboard');
 
   // Advanced toggles
   const [showTemplateLibrary, setShowTemplateLibrary] = useState(false);
@@ -137,7 +138,6 @@ export default function App() {
   };
 
   const handleDeleteProject = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this smart contract workspace?")) return;
     try {
       const res = await authedFetch(`/api/projects/${id}`, {
         method: 'DELETE'
@@ -147,6 +147,7 @@ export default function App() {
         if (activeProjectId === id) {
           setActiveProjectId('');
         }
+        await fetchProjects(); // Refresh dashboard list of projects
       }
     } catch (err) {
       console.error("Failed to delete project", err);
@@ -812,6 +813,12 @@ export default function App() {
           }}
           theme={theme}
           isProcessing={isProcessing}
+        />
+      ) : activeTab === 'admin' ? (
+        <AdminDashboard
+          theme={theme}
+          authedFetch={authedFetch}
+          onClose={() => setActiveTab('dashboard')}
         />
       ) : (
         /* Workspace View (with fallback empty splash state) */

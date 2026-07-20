@@ -7,7 +7,7 @@ interface AuthContextType {
   user: UserProfile | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<UserProfile>;
-  signup: (email: string, password: string, fullName: string) => Promise<UserProfile>;
+  signup: (email: string, password: string, fullName: string, securityQuestion: string, securityAnswer: string) => Promise<UserProfile>;
   logout: () => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
 }
@@ -92,9 +92,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const signup = async (email: string, password: string, fullName: string): Promise<UserProfile> => {
+  const signup = async (email: string, password: string, fullName: string, securityQuestion: string, securityAnswer: string): Promise<UserProfile> => {
     try {
-      const profile = await AuthService.signup(email, password, fullName);
+      const profile = await AuthService.signup(email, password, fullName, securityQuestion, securityAnswer);
       setUser(profile);
       return profile;
     } catch (error) {

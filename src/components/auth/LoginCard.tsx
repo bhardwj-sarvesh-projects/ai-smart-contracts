@@ -4,7 +4,6 @@ import { Mail, Lock, Eye, EyeOff, Cpu, ArrowRight } from 'lucide-react';
 interface LoginCardProps {
   onNavigate: (view: 'signup' | 'forgot_password') => void;
   onLogin: (email: string, password: string) => Promise<void>;
-  onGoogleLogin: () => void;
   isAuthenticating: boolean;
   error: string | null;
 }
@@ -12,7 +11,6 @@ interface LoginCardProps {
 export default function LoginCard({
   onNavigate,
   onLogin,
-  onGoogleLogin,
   isAuthenticating,
   error: apiError,
 }: LoginCardProps) {
@@ -57,17 +55,17 @@ export default function LoginCard({
     <div className="w-full bg-white border border-slate-200/80 rounded-3xl p-8 md:p-10 shadow-[0_20px_50px_rgba(0,0,0,0.04)] relative overflow-hidden">
       {/* Decorative Brand Header */}
       <div className="flex flex-col items-center text-center mb-8">
-        <div className="p-3 bg-blue-50 rounded-2xl border border-blue-100 text-blue-600 mb-4 shadow-sm">
-          <Cpu size={28} className="animate-pulse" />
+        <div className="mb-4">
+          <img src="https://blockonmate.com/blockonmate-logo.png" alt="BlockOnMate Logo" className="h-14 w-auto drop-shadow-md" referrerPolicy="no-referrer" />
         </div>
         <span className="px-2.5 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider text-blue-600 bg-blue-50 rounded-full border border-blue-100 mb-2">
-          SaaS Studio
+          AI Contracts
         </span>
         <h2 className="text-2xl font-bold font-sans text-slate-900 tracking-tight">
           Welcome back
         </h2>
         <p className="text-sm text-slate-500 mt-1 max-w-xs">
-          Sign in to your SmartContract.ai Studio account
+          Powered by BlockOnMate
         </p>
       </div>
 
@@ -184,31 +182,6 @@ export default function LoginCard({
           )}
         </button>
       </form>
-
-      {/* Social Divider */}
-      <div className="relative my-7">
-        <div className="absolute inset-0 flex items-center">
-          <div className="w-full border-t border-slate-100" />
-        </div>
-        <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-white px-3.5 text-slate-400 font-semibold tracking-wider">
-            Or continue with
-          </span>
-        </div>
-      </div>
-
-      {/* Google Sign In */}
-      <button
-        type="button"
-        onClick={onGoogleLogin}
-        disabled={isAuthenticating || isSubmitting}
-        className="w-full flex items-center justify-center gap-3 px-5 py-3.5 bg-slate-50 hover:bg-slate-100/80 text-slate-700 font-semibold text-sm rounded-2xl border border-slate-200/80 focus:outline-none focus:ring-4 focus:ring-slate-100 transition-all active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
-      >
-        <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-          <path d="M12.24 10.285V13.4h6.887C18.2 15.614 15.645 18 12.24 18c-3.86 0-7-3.14-7-7s3.14-7 7-7c1.7 0 3.25.61 4.47 1.61L19.1 3.2C17.21 1.45 14.81.4 12.24.4 5.83.4.63 5.6.63 12s5.2 11.6 11.61 11.6c6.68 0 11.13-4.7 11.13-11.34 0-.76-.08-1.33-.23-1.98H12.24z" />
-        </svg>
-        Sign in with Google
-      </button>
 
       {/* Switch to Sign Up */}
       <div className="mt-8 text-center text-sm text-slate-500 font-medium">

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { 
   Layers, ShieldCheck, Download, Plus, RefreshCw, FolderOpen, 
   ChevronDown, Check, Library, History, Sun, Moon, Home, 
-  Code2, Shield, Sliders, Menu, X, LogOut, Settings2
+  Code2, Shield, Sliders, Menu, X, LogOut, Settings2, ShieldAlert
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Project } from '../types';
@@ -19,8 +19,8 @@ interface HeaderProps {
   onToggleVersionHistory: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
-  activeTab: 'dashboard' | 'workspace' | 'auditing';
-  onChangeTab: (tab: 'dashboard' | 'workspace' | 'auditing') => void;
+  activeTab: 'dashboard' | 'workspace' | 'auditing' | 'admin';
+  onChangeTab: (tab: 'dashboard' | 'workspace' | 'auditing' | 'admin') => void;
   currentUser: any;
   activeProvider: string;
   onOpenSettings: () => void;
@@ -49,10 +49,13 @@ export default function Header({
   const [showProjectsDropdown, setShowProjectsDropdown] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.email?.toLowerCase() === 'sarveshtiwarisarvesh@gmail.com';
+
   const navItems = [
     { id: 'dashboard', name: 'Dashboard', icon: Home },
     { id: 'workspace', name: 'Workspace', icon: Code2 },
     { id: 'auditing', name: 'Auditing Hub', icon: Shield },
+    ...(isAdmin ? [{ id: 'admin', name: 'Admin Panel', icon: ShieldAlert }] : [])
   ] as const;
 
   return (
@@ -89,7 +92,7 @@ export default function Header({
             return (
               <button
                 key={item.id}
-                onClick={() => onChangeTab(item.id)}
+                onClick={() => onChangeTab(item.id as 'dashboard' | 'workspace' | 'auditing' | 'admin')}
                 id={`nav-${item.id}`}
                 className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all duration-250 cursor-pointer ${
                   isActive
@@ -366,7 +369,7 @@ export default function Header({
                     <button
                       key={item.id}
                       onClick={() => {
-                        onChangeTab(item.id);
+                        onChangeTab(item.id as 'dashboard' | 'workspace' | 'auditing' | 'admin');
                         setMobileMenuOpen(false);
                       }}
                       className={`py-3 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-1.5 transition-all border ${

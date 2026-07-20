@@ -29,11 +29,11 @@ export default function AuthView({ onLoginSuccess }: AuthViewProps) {
     }
   };
 
-  const handleEmailSignUp = async (email: string, password: string, fullName: string) => {
+  const handleEmailSignUp = async (email: string, password: string, fullName: string, securityQuestion: string, securityAnswer: string) => {
     setIsAuthenticating(true);
     setError(null);
     try {
-      const newUser = await signup(email, password, fullName);
+      const newUser = await signup(email, password, fullName, securityQuestion, securityAnswer);
       onLoginSuccess(newUser);
     } catch (err: any) {
       setError(err.message || 'Registration failed. Please try again.');
@@ -53,10 +53,6 @@ export default function AuthView({ onLoginSuccess }: AuthViewProps) {
     }
   };
 
-  const handleGoogleLogin = () => {
-    setError('Google Single Sign-On is currently restricted. Please authenticate using your Email and Password.');
-  };
-
   return (
     <div id="auth-view" className="relative min-h-screen w-full flex items-center justify-center bg-slate-50 overflow-hidden text-slate-800">
       {/* Subtle modern vector grid background for clean SaaS feel */}
@@ -70,16 +66,16 @@ export default function AuthView({ onLoginSuccess }: AuthViewProps) {
         <div className="flex items-center gap-2">
           <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse" />
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-widest font-mono">
-            SmartContract.ai Studio
+            AI Contracts
           </span>
         </div>
         <a 
-          href="https://smartcontract.ai" 
+          href="https://blockonmate.com" 
           target="_blank" 
           rel="noopener noreferrer" 
           className="pointer-events-auto flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 transition-colors"
         >
-          Documentation
+          BlockOnMate Website
           <ArrowUpRight size={14} />
         </a>
       </div>
@@ -91,7 +87,6 @@ export default function AuthView({ onLoginSuccess }: AuthViewProps) {
             <LoginCard
               onNavigate={setView}
               onLogin={handleEmailLogin}
-              onGoogleLogin={handleGoogleLogin}
               isAuthenticating={isAuthenticating}
               error={error}
             />
@@ -101,7 +96,6 @@ export default function AuthView({ onLoginSuccess }: AuthViewProps) {
             <SignUpCard
               onNavigate={setView}
               onSignUp={handleEmailSignUp}
-              onGoogleLogin={handleGoogleLogin}
               isAuthenticating={isAuthenticating}
               error={error}
             />
@@ -120,10 +114,10 @@ export default function AuthView({ onLoginSuccess }: AuthViewProps) {
         <div className="mt-8 flex flex-col items-center gap-3 text-center">
           <div className="flex items-center gap-2 text-xs text-slate-400 font-medium bg-white/80 border border-slate-100 rounded-full px-4 py-1.5 shadow-sm">
             <ShieldCheck size={14} className="text-blue-500" />
-            <span>Secure Enterprise Single Sign-On enabled</span>
+            <span>Secure Enterprise Authentication enabled</span>
           </div>
           <p className="text-[10px] text-slate-400 font-semibold tracking-wider uppercase">
-            © 2026 SmartContract.ai Studio. All rights reserved.
+            © 2026 AI Contracts. Subtitle: Powered by BlockOnMate. All rights reserved.
           </p>
         </div>
       </div>

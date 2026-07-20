@@ -25,6 +25,16 @@ export interface UserProfile {
   photoURL: string;
   preferences: Record<string, any>;
   aiSettings: Record<string, any>;
+  securityQuestion?: string;
+  securityAnswerHash?: string;
+}
+
+// Client-side SHA-256 helper for security answer hashing
+async function hashAnswer(answer: string): Promise<string> {
+  const msgBuffer = new TextEncoder().encode(answer.trim().toLowerCase());
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 export const mapAuthError = (code: string): string => {
@@ -172,9 +182,13 @@ export const AuthService = {
   },
 
   /**
-   * Sign up a new user with email, password, and full name
+   * Sign up a new user with email, password, full name, and security question
    */
-  async signup(email: string, password: string, fullName: string): Promise<UserProfile> {
+  async signup(email: string, password: string, fullName: string, securityQuestion: string, securityAnswer: string): Promise<UserProfile> {
+    const isOwner = email.trim().toLowerCase() === 'sarveshtiwarisarvesh@gmail.com';
+    const role = isOwner ? 'admin' : 'user';
+    const securityAnswerHash = await hashAnswer(securityAnswer);
+
     if (!isFirebaseConfigured || !auth || !db) {
       console.warn('[OFFLINE_MODE] Signing up user locally.');
       const offlineDb = JSON.parse(localStorage.getItem('offline_users_db') || '{}');
@@ -187,13 +201,15 @@ export const AuthService = {
         uid: uid,
         fullName: fullName,
         email: email,
-        role: 'user',
+        role: role,
         isActive: true,
         createdAt: new Date().toISOString(),
         lastLogin: new Date().toISOString(),
         photoURL: '',
         preferences: {},
-        aiSettings: {}
+        aiSettings: {},
+        securityQuestion,
+        securityAnswerHash
       };
       offlineDb[uid] = userProfile;
       localStorage.setItem('offline_users_db', JSON.stringify(offlineDb));
@@ -211,13 +227,15 @@ export const AuthService = {
         uid: firebaseUser.uid,
         fullName: fullName,
         email: firebaseUser.email || email,
-        role: 'user',
+        role: role,
         isActive: true,
         createdAt: new Date().toISOString(),
         lastLogin: new Date().toISOString(),
         photoURL: '',
         preferences: {},
-        aiSettings: {}
+        aiSettings: {},
+        securityQuestion,
+        securityAnswerHash
       };
       
       try {
@@ -302,6 +320,117 @@ export const AuthService = {
         } catch (_) {}
       }
       return null;
+    }
+  },
+
+  /**
+   * Get the security question for a given email
+   */
+  async getSecurityQuestion(email: string): Promise<string> {
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!isFirebaseConfigured || !auth || !db) {
+      const offlineDb = JSON.parse(localStorage.getItem('offline_users_db') || '{}');
+      const found = Object.values(offlineDb).find((u: any) => u.email.toLowerCase() === cleanEmail) as UserProfile | undefined;
+      if (!found) {
+        throw new Error('User account not found.');
+      }
+      if (!found.securityQuestion) {
+        throw new Error('This account does not have a security question configured.');
+      }
+      return found.securityQuestion;
+    }
+
+    try {
+      const { collection, query, where, getDocs } = await import('firebase/firestore');
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('email', '==', cleanEmail));
+      const querySnapshot = await getDocs(q);
+      
+      if (querySnapshot.empty) {
+        // Fallback: check local profile cache
+        const cachedKeys = Object.keys(localStorage).filter(k => k.startsWith('user_profile_'));
+        for (const k of cachedKeys) {
+          try {
+            const p = JSON.parse(localStorage.getItem(k) || '{}');
+            if (p.email?.toLowerCase() === cleanEmail) {
+              if (p.securityQuestion) return p.securityQuestion;
+            }
+          } catch (_) {}
+        }
+        throw new Error('User account not found.');
+      }
+
+      const docSnap = querySnapshot.docs[0];
+      const data = docSnap.data();
+      if (!data.securityQuestion) {
+        throw new Error('This account does not have a security question configured.');
+      }
+      return data.securityQuestion;
+    } catch (err: any) {
+      console.warn('[FIRESTORE_FALLBACK] Error getting security question:', err);
+      // Fallback search local storage cache
+      const cachedKeys = Object.keys(localStorage).filter(k => k.startsWith('user_profile_'));
+      for (const k of cachedKeys) {
+        try {
+          const p = JSON.parse(localStorage.getItem(k) || '{}');
+          if (p.email?.toLowerCase() === cleanEmail) {
+            if (p.securityQuestion) return p.securityQuestion;
+          }
+        } catch (_) {}
+      }
+      throw new Error(err.message || 'Failed to retrieve security question.');
+    }
+  },
+
+  /**
+   * Verify the security answer for a given email
+   */
+  async verifySecurityAnswer(email: string, answer: string): Promise<boolean> {
+    const cleanEmail = email.trim().toLowerCase();
+    const inputHash = await hashAnswer(answer);
+
+    if (!isFirebaseConfigured || !auth || !db) {
+      const offlineDb = JSON.parse(localStorage.getItem('offline_users_db') || '{}');
+      const found = Object.values(offlineDb).find((u: any) => u.email.toLowerCase() === cleanEmail) as UserProfile | undefined;
+      if (!found) {
+        throw new Error('User account not found.');
+      }
+      if (found.securityAnswerHash === inputHash) {
+        return true;
+      }
+      throw new Error('Incorrect answer to the security question.');
+    }
+
+    try {
+      const { collection, query, where, getDocs } = await import('firebase/firestore');
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('email', '==', cleanEmail));
+      const querySnapshot = await getDocs(q);
+      
+      if (querySnapshot.empty) {
+        throw new Error('User account not found.');
+      }
+
+      const docSnap = querySnapshot.docs[0];
+      const data = docSnap.data();
+      if (data.securityAnswerHash === inputHash) {
+        return true;
+      }
+      throw new Error('Incorrect answer to the security question.');
+    } catch (err: any) {
+      console.warn('[FIRESTORE_FALLBACK] Error verifying security answer:', err);
+      // Fallback search cache
+      const cachedKeys = Object.keys(localStorage).filter(k => k.startsWith('user_profile_'));
+      for (const k of cachedKeys) {
+        try {
+          const p = JSON.parse(localStorage.getItem(k) || '{}');
+          if (p.email?.toLowerCase() === cleanEmail) {
+            if (p.securityAnswerHash === inputHash) return true;
+          }
+        } catch (_) {}
+      }
+      throw new Error(err.message || 'Failed to verify security answer.');
     }
   }
 };

@@ -1,9 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Plus, Search, Trash2, Code2, Shield, Eye, Calendar, FileCode, CheckCircle, 
-  Layers, ChevronRight, Activity, TrendingUp, AlertTriangle, Cpu, Globe, Zap
+  Layers, ChevronRight, Activity, TrendingUp, AlertTriangle, Cpu, Globe, Zap, X
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Project } from '../types';
 
 interface DashboardViewProps {
@@ -23,6 +23,19 @@ export default function DashboardView({
 }: DashboardViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [blockchainFilter, setBlockchainFilter] = useState('all');
+  
+  // Custom delete and notification states
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => {
+        setToastMessage(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   // Stats Calculations
   const stats = useMemo(() => {
@@ -362,7 +375,7 @@ export default function DashboardView({
                   theme === 'dark' ? 'border-slate-850/80 bg-slate-950/40' : 'border-slate-200/50 bg-slate-50/50'
                 }`}>
                   <button
-                    onClick={() => onDeleteProject(project.id)}
+                    onClick={() => setProjectToDelete(project)}
                     className="p-2.5 rounded-xl text-rose-500 hover:bg-rose-500/10 hover:text-rose-400 border border-transparent hover:border-rose-500/20 transition-all cursor-pointer"
                     title="Delete workspace"
                   >
@@ -402,6 +415,119 @@ export default function DashboardView({
           })}
         </div>
       )}
+
+      {/* Custom Deletion Confirmation Modal */}
+      <AnimatePresence>
+        {projectToDelete && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop overlay */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setProjectToDelete(null)}
+              className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
+            />
+
+            {/* Modal Box */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 16 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+              className={`relative w-full max-w-md rounded-2xl border p-6 shadow-2xl relative z-10 ${
+                theme === 'dark' 
+                  ? 'bg-slate-900 border-slate-800 text-slate-100 shadow-slate-950/50' 
+                  : 'bg-white border-slate-200 text-slate-800 shadow-slate-300/30'
+              }`}
+            >
+              <button
+                onClick={() => setProjectToDelete(null)}
+                className={`absolute top-4 right-4 p-1.5 rounded-lg transition-colors ${
+                  theme === 'dark' ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-150 text-slate-500'
+                }`}
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-500 border border-rose-500/20">
+                  <AlertTriangle className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-md font-bold font-sans tracking-tight">Delete Workspace?</h3>
+                  <p className="text-[10px] text-slate-400 font-mono">WORKSPACE ID: {projectToDelete.id}</p>
+                </div>
+              </div>
+
+              <div className="space-y-3 mb-6">
+                <p className={`text-xs leading-relaxed ${theme === 'dark' ? 'text-slate-300' : 'text-slate-500'}`}>
+                  Are you absolutely sure you want to permanently delete <span className="font-extrabold text-rose-500">"{projectToDelete.name}"</span>?
+                </p>
+                <div className={`p-3.5 rounded-xl border text-[11px] leading-relaxed space-y-1.5 ${
+                  theme === 'dark' ? 'bg-slate-950/50 border-slate-850/80 text-slate-400' : 'bg-slate-50 border-slate-150 text-slate-500'
+                }`}>
+                  <p className="font-bold uppercase text-[9px] tracking-wider text-rose-500/80">Cascading deletion actions:</p>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    <li>Remove source smart contracts</li>
+                    <li>Wipe version history & prompt records</li>
+                    <li>Purge sandbox deployment history</li>
+                    <li>Delete compiled logs & audit reports</li>
+                  </ul>
+                </div>
+                <p className="text-[10px] text-slate-400 leading-none italic">
+                  Note: This operation is permanent, syncs with Firestore, and cannot be undone.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setProjectToDelete(null)}
+                  className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                    theme === 'dark' 
+                      ? 'bg-slate-850 hover:bg-slate-800 text-slate-300' 
+                      : 'bg-slate-100 hover:bg-slate-150 text-slate-700'
+                  }`}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    const deletedName = projectToDelete.name;
+                    onDeleteProject(projectToDelete.id);
+                    setProjectToDelete(null);
+                    setToastMessage(`Workspace "${deletedName}" and all associated metadata were deleted successfully.`);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-lg shadow-rose-600/20 transition-all active:scale-98 cursor-pointer"
+                >
+                  Confirm Delete
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Toast Notification Banner */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 32 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 32 }}
+            className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-slate-900 border border-slate-800 text-slate-100 px-4 py-3.5 rounded-xl shadow-2xl max-w-sm"
+          >
+            <CheckCircle className="w-5 h-5 text-green-500 shrink-0" />
+            <p className="text-xs font-medium leading-relaxed">{toastMessage}</p>
+            <button
+              onClick={() => setToastMessage(null)}
+              className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

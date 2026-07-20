@@ -143,23 +143,26 @@ app.get("/api/test-openai", async (req, res) => {
   }
 });
 
-// GET all projects
+// GET all projects (User Isolated)
 app.get("/api/projects", (req, res) => {
   const db = readDb();
-  res.json(db.projects);
+  const userId = req.headers["x-user-id"] as string || "default";
+  const userProjects = db.projects.filter((p: any) => (p.userId || "default") === userId);
+  res.json(userProjects);
 });
 
-// GET a single project
+// GET a single project (User Isolated)
 app.get("/api/projects/:id", (req, res) => {
   const db = readDb();
-  const project = db.projects.find((p: any) => p.id === req.params.id);
+  const userId = req.headers["x-user-id"] as string || "default";
+  const project = db.projects.find((p: any) => p.id === req.params.id && (p.userId || "default") === userId);
   if (!project) {
-    return res.status(404).json({ error: "Project not found" });
+    return res.status(404).json({ error: "Project not found or access denied" });
   }
   res.json(project);
 });
 
-// CREATE a new project
+// CREATE a new project (User Isolated)
 app.post("/api/projects", (req, res) => {
   const { name, description, blockchain, language, framework, contractType, files } = req.body;
   
@@ -168,8 +171,10 @@ app.post("/api/projects", (req, res) => {
   }
 
   const db = readDb();
+  const userId = req.headers["x-user-id"] as string || "default";
   const newProject = {
     id: `project-${Date.now()}`,
+    userId: userId, // Enforce User Isolation
     name,
     description: description || `A custom ${contractType || 'smart contract'} project on ${blockchain}.`,
     blockchain,
@@ -196,19 +201,20 @@ app.post("/api/projects", (req, res) => {
   res.status(201).json(newProject);
 });
 
-// UPDATE project
+// UPDATE project (User Isolated)
 app.put("/api/projects/:id", (req, res) => {
   const db = readDb();
-  const index = db.projects.findIndex((p: any) => p.id === req.params.id);
+  const userId = req.headers["x-user-id"] as string || "default";
+  const index = db.projects.findIndex((p: any) => p.id === req.params.id && (p.userId || "default") === userId);
   if (index === -1) {
-    return res.status(404).json({ error: "Project not found" });
+    return res.status(404).json({ error: "Project not found or access denied" });
   }
 
   db.projects[index] = {
     ...db.projects[index],
     ...req.body,
-    // Ensure id and createdAt never change
     id: db.projects[index].id,
+    userId: db.projects[index].userId, // Enforce userId doesn't change
     createdAt: db.projects[index].createdAt
   };
 
@@ -216,17 +222,20 @@ app.put("/api/projects/:id", (req, res) => {
   res.json(db.projects[index]);
 });
 
-// DELETE project
+// DELETE project (Cascading delete - deletes versions, deployments, audit, and metadata, User Isolated)
 app.delete("/api/projects/:id", (req, res) => {
   const db = readDb();
-  const index = db.projects.findIndex((p: any) => p.id === req.params.id);
+  const userId = req.headers["x-user-id"] as string || "default";
+  const index = db.projects.findIndex((p: any) => p.id === req.params.id && (p.userId || "default") === userId);
   if (index === -1) {
-    return res.status(404).json({ error: "Project not found" });
+    return res.status(404).json({ error: "Project not found or access denied" });
   }
 
+  // Cascading delete is implicitly done because versions, deployments, audit,
+  // and metadata are nested inside the deleted project record in db.json!
   db.projects.splice(index, 1);
   writeDb(db);
-  res.json({ success: true });
+  res.json({ success: true, message: "Workspace and all associated versions, audit reports, history and metadata deleted permanently." });
 });
 
 // POST /api/generate-plan
@@ -684,6 +693,108 @@ app.post("/api/deploy", (req, res) => {
     success: true,
     deployment: deploymentRecord
   });
+});
+
+
+// -------------------------------------------------------------
+// ADMINISTRATOR PORTAL ENDPOINTS
+// -------------------------------------------------------------
+
+// Admin Role protection middleware helper
+function checkAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const email = req.headers["x-user-email"] as string;
+  if (email && email.trim().toLowerCase() === "sarveshtiwarisarvesh@gmail.com") {
+    return next();
+  }
+  // Check from configs
+  const userId = req.headers["x-user-id"] as string;
+  if (userId) {
+    const config = SettingsService.get(userId);
+    if (config && config.email && config.email.trim().toLowerCase() === "sarveshtiwarisarvesh@gmail.com") {
+      return next();
+    }
+  }
+  return res.status(403).json({ error: "Access denied: Administrator role required." });
+}
+
+// Admin stats
+app.get("/api/admin/stats", checkAdmin, (req, res) => {
+  const db = readDb();
+  const allConfigs = SettingsService.getAllConfigs();
+  const usersList = Object.values(allConfigs);
+
+  const totalUsers = usersList.length;
+  const totalProjects = db.projects.length;
+
+  let sumScore = 0;
+  let scoreCount = 0;
+  const blockchainCounts: Record<string, number> = {};
+
+  db.projects.forEach((p: any) => {
+    if (p.audit?.score !== undefined) {
+      sumScore += p.audit.score;
+      scoreCount++;
+    }
+    const chain = p.blockchain || "Unknown";
+    blockchainCounts[chain] = (blockchainCounts[chain] || 0) + 1;
+  });
+
+  const avgAuditScore = scoreCount > 0 ? Math.round(sumScore / scoreCount) : 0;
+
+  res.json({
+    totalUsers,
+    totalProjects,
+    avgAuditScore,
+    blockchainCounts
+  });
+});
+
+// Admin list users
+app.get("/api/admin/users", checkAdmin, (req, res) => {
+  const allConfigs = SettingsService.getAllConfigs();
+  res.json(Object.values(allConfigs));
+});
+
+// Admin list projects
+app.get("/api/admin/projects", checkAdmin, (req, res) => {
+  const db = readDb();
+  res.json(db.projects);
+});
+
+// Admin toggle user status (block/unblock)
+app.put("/api/admin/users/:userId/toggle-status", checkAdmin, (req, res) => {
+  const { userId } = req.params;
+  const current = SettingsService.get(userId);
+  if (!current) {
+    // Let's bootstrap user if they don't exist yet in config but exist in request
+    const mockEmail = req.headers["x-user-email"] as string || "unknown@ai-contracts.com";
+    const initialized = SettingsService.save(userId, { email: mockEmail, isActive: true });
+    const toggled = SettingsService.updateRoleAndStatus(userId, { isActive: false });
+    return res.json(toggled);
+  }
+
+  const updatedActive = current.isActive === false ? true : false;
+  const updated = SettingsService.updateRoleAndStatus(userId, { isActive: updatedActive });
+  res.json(updated);
+});
+
+// Admin update user role
+app.put("/api/admin/users/:userId/role", checkAdmin, (req, res) => {
+  const { userId } = req.params;
+  const { role } = req.body;
+  if (!role || (role !== "admin" && role !== "user")) {
+    return res.status(400).json({ error: "Invalid role specified" });
+  }
+
+  const current = SettingsService.get(userId);
+  if (!current) {
+    // Bootstrap
+    const mockEmail = req.headers["x-user-email"] as string || "unknown@ai-contracts.com";
+    SettingsService.save(userId, { email: mockEmail });
+  }
+
+  const updated = SettingsService.updateRoleAndStatus(userId, { role });
+  res.json(updated);
 });
 
 
