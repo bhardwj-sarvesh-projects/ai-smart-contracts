@@ -95,7 +95,7 @@ export default function RightAssistant({
         >
           <ShieldAlert className="w-3.5 h-3.5" />
           Security Auditor
-          {auditResult && auditResult.vulnerabilities.length > 0 && (
+          {auditResult && Array.isArray(auditResult.vulnerabilities) && auditResult.vulnerabilities.length > 0 && (
             <span className="bg-rose-500 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full">
               {auditResult.vulnerabilities.length}
             </span>
@@ -257,7 +257,7 @@ export default function RightAssistant({
                 {/* Vulnerabilities List */}
                 <div className="space-y-2">
                   <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Vulnerability Logs</p>
-                  {auditResult.vulnerabilities.length === 0 ? (
+                  {(!auditResult.vulnerabilities || !Array.isArray(auditResult.vulnerabilities) || auditResult.vulnerabilities.length === 0) ? (
                     <div className="flex flex-col items-center justify-center p-6 bg-emerald-950/10 border border-emerald-500/20 rounded-lg text-center text-emerald-400">
                       <CheckCircle className="w-8 h-8 mb-2" />
                       <p className="text-xs font-semibold">Pristine Security Posture</p>
@@ -274,9 +274,9 @@ export default function RightAssistant({
                             <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase ${getSeverityColor(v.severity)}`}>
                               {v.severity}
                             </span>
-                            {v.line && (
+                            {v.line && v.file && (
                               <span className="text-[10px] font-mono text-slate-500">
-                                Line {v.line} in {v.file.split('/').pop()}
+                                Line {v.line} in {String(v.file).split('/').pop()}
                               </span>
                             )}
                           </div>

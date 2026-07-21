@@ -9,6 +9,7 @@ interface PipelineDashboardProps {
   onDeploy: (network: string, contractName: string) => Promise<void>;
   isCompiling: boolean;
   isDeploying: boolean;
+  theme?: 'dark' | 'light';
 }
 
 interface PipelineStep {
@@ -26,8 +27,10 @@ export default function PipelineDashboard({
   onCompile,
   onDeploy,
   isCompiling,
-  isDeploying
+  isDeploying,
+  theme = 'dark'
 }: PipelineDashboardProps) {
+  const isDark = theme === 'dark';
   const [activeStepIndex, setActiveStepIndex] = useState<number | null>(null);
   const [pipelineActive, setPipelineActive] = useState(false);
   const [selectedNetwork, setSelectedNetwork] = useState('ethereum-sepolia');
@@ -441,13 +444,17 @@ export default function PipelineDashboard({
   };
 
   return (
-    <div className="h-full flex flex-col bg-slate-950 text-slate-300 font-mono text-[11px] overflow-hidden border-t border-slate-800">
+    <div className={`h-full flex flex-col font-mono text-[11px] overflow-hidden border-t transition-colors duration-300 ${
+      isDark ? 'bg-slate-950 text-slate-300 border-slate-800' : 'bg-slate-50 text-slate-700 border-slate-200'
+    }`}>
       
       {/* Header Pipeline Controls */}
-      <div className="p-2 border-b border-slate-800 bg-slate-900 flex items-center justify-between flex-shrink-0 select-none">
+      <div className={`p-2 border-b flex items-center justify-between flex-shrink-0 select-none ${
+        isDark ? 'border-slate-800 bg-slate-900' : 'border-slate-200 bg-white'
+      }`}>
         <div className="flex items-center gap-2">
-          <Zap className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-          <span className="text-[10px] font-bold text-white uppercase tracking-wider">Deploy & Pipeline Assembly</span>
+          <Zap className="w-3.5 h-3.5 text-cyan-500 animate-pulse" />
+          <span className={`text-[10px] font-bold uppercase tracking-wider ${isDark ? 'text-white' : 'text-slate-800'}`}>Deploy & Pipeline Assembly</span>
         </div>
 
         <div className="flex items-center gap-3">
@@ -482,7 +489,9 @@ export default function PipelineDashboard({
             <select
               value={selectedNetwork}
               onChange={(e) => setSelectedNetwork(e.target.value)}
-              className="bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-slate-300 font-semibold focus:outline-none focus:border-cyan-500"
+              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold focus:outline-none focus:border-cyan-500 border transition-colors ${
+                isDark ? 'bg-slate-950 border-slate-800 text-slate-300' : 'bg-white border-slate-200 text-slate-700'
+              }`}
             >
               <option value="ethereum-sepolia">Sepolia Testnet (EVM)</option>
               <option value="ethereum-mainnet">Ethereum Mainnet (EVM)</option>
@@ -566,7 +575,9 @@ export default function PipelineDashboard({
       <div className="flex-1 flex min-h-0">
         
         {/* Pipeline Stepper Scrollable */}
-        <div className="w-1/2 border-r border-slate-800 p-2 overflow-y-auto space-y-1.5 bg-slate-950/40">
+        <div className={`w-1/2 border-r p-2 overflow-y-auto space-y-1.5 transition-colors duration-300 ${
+          isDark ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-slate-50/50'
+        }`}>
           {steps.map((step, idx) => {
             const isSelected = activeStepIndex === idx;
             return (
@@ -580,7 +591,9 @@ export default function PipelineDashboard({
                     ? 'border-emerald-500/20 bg-emerald-500/2'
                     : step.status === 'failed'
                     ? 'border-rose-500/20 bg-rose-500/2'
-                    : 'border-slate-850/50 bg-slate-900/10 hover:border-slate-800'
+                    : isDark
+                    ? 'border-slate-850/50 bg-slate-900/10 hover:border-slate-800'
+                    : 'border-slate-200 bg-white hover:bg-slate-50 shadow-sm'
                 }`}
               >
                 {/* Visual Circle Indicator */}
@@ -592,7 +605,9 @@ export default function PipelineDashboard({
                   ) : step.status === 'failed' ? (
                     <XCircle className="w-3.5 h-3.5 text-rose-400" />
                   ) : (
-                    <div className="w-3.5 h-3.5 rounded-full border border-slate-700 bg-slate-900 flex items-center justify-center text-[8px] text-slate-500 font-bold">
+                    <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center text-[8px] font-bold ${
+                      isDark ? 'border-slate-700 bg-slate-900 text-slate-500' : 'border-slate-300 bg-slate-100 text-slate-500'
+                    }`}>
                       {idx + 1}
                     </div>
                   )}
@@ -601,16 +616,18 @@ export default function PipelineDashboard({
                 {/* Step Details */}
                 <div className="flex-1 truncate">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-bold text-white">{step.name}</span>
-                    <span className="text-[8px] text-slate-600 font-mono">Stage {idx + 1}</span>
+                    <span className={`text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>{step.name}</span>
+                    <span className="text-[8px] text-slate-500 font-mono">Stage {idx + 1}</span>
                   </div>
                   {step.message && (
-                    <p className="text-[9px] text-slate-400 mt-0.5 leading-relaxed truncate">{step.message}</p>
+                    <p className={`text-[9px] mt-0.5 leading-relaxed truncate ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{step.message}</p>
                   )}
 
                   {/* Collapse details logs */}
                   {isSelected && step.logs && step.logs.length > 0 && (
-                    <pre className="mt-2 p-2 bg-slate-950 border border-slate-850 rounded text-[9px] text-slate-300 whitespace-pre-wrap leading-relaxed select-text overflow-x-auto">
+                    <pre className={`mt-2 p-2 border rounded text-[9px] whitespace-pre-wrap leading-relaxed select-text overflow-x-auto ${
+                      isDark ? 'bg-slate-950 border-slate-850 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-700'
+                    }`}>
                       {step.logs.join('\n')}
                     </pre>
                   )}
@@ -621,7 +638,9 @@ export default function PipelineDashboard({
         </div>
 
         {/* Dynamic Analysis, Gas, Deployment Dashboard Outputs */}
-        <div className="w-1/2 p-3 overflow-y-auto space-y-4 bg-slate-950/80">
+        <div className={`w-1/2 p-3 overflow-y-auto space-y-4 transition-colors duration-300 ${
+          isDark ? 'bg-slate-950/80' : 'bg-white'
+        }`}>
           
           {/* Target Outputs */}
           <div className="space-y-2">
@@ -629,11 +648,11 @@ export default function PipelineDashboard({
               <Server className="w-3 h-3 text-slate-500" /> Assembly Deploy Target Outputs
             </h4>
             <div className="grid grid-cols-2 gap-3 font-mono text-[10px]">
-              <div className="p-2 bg-slate-900/60 border border-slate-850 rounded">
+              <div className={`p-2 border rounded ${isDark ? 'bg-slate-900/60 border-slate-850' : 'bg-slate-50 border-slate-150'}`}>
                 <span className="text-slate-500 text-[8px] uppercase">Gas Units Estimated</span>
-                <p className="text-white font-bold mt-0.5">{gasEstimated ? `${gasEstimated.toLocaleString()} Units` : 'Run Pipeline'}</p>
+                <p className={`font-bold mt-0.5 ${isDark ? 'text-white' : 'text-slate-800'}`}>{gasEstimated ? `${gasEstimated.toLocaleString()} Units` : 'Run Pipeline'}</p>
               </div>
-              <div className="p-2 bg-slate-900/60 border border-slate-850 rounded">
+              <div className={`p-2 border rounded ${isDark ? 'bg-slate-900/60 border-slate-850' : 'bg-slate-50 border-slate-150'}`}>
                 <span className="text-slate-500 text-[8px] uppercase">Optimization Efficiency</span>
                 <p className="text-emerald-400 font-bold mt-0.5">{optimizationScore ? `${optimizationScore}/100` : 'Run Pipeline'}</p>
               </div>

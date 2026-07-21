@@ -15,6 +15,15 @@ interface BlockchainSelectorProps {
     prompt: string;
   }) => void;
   isGenerating: boolean;
+  initialData?: {
+    name: string;
+    description: string;
+    blockchain: string;
+    language: string;
+    framework: string;
+    contractType: string;
+    prompt: string;
+  } | null;
 }
 
 const SMART_CONTRACT_TYPES = [
@@ -36,15 +45,16 @@ const SMART_CONTRACT_TYPES = [
 export default function BlockchainSelector({
   onClose,
   onCreateProject,
-  isGenerating
+  isGenerating,
+  initialData
 }: BlockchainSelectorProps) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [selectedBlockchain, setSelectedBlockchain] = useState('ethereum');
-  const [selectedLanguage, setSelectedLanguage] = useState('solidity');
-  const [selectedFramework, setSelectedFramework] = useState('Hardhat');
-  const [selectedType, setSelectedType] = useState('ERC20 Token');
-  const [prompt, setPrompt] = useState('');
+  const [name, setName] = useState(initialData?.name || '');
+  const [description, setDescription] = useState(initialData?.description || '');
+  const [selectedBlockchain, setSelectedBlockchain] = useState(initialData?.blockchain || 'ethereum');
+  const [selectedLanguage, setSelectedLanguage] = useState(initialData?.language || 'solidity');
+  const [selectedFramework, setSelectedFramework] = useState(initialData?.framework || 'Hardhat');
+  const [selectedType, setSelectedType] = useState(initialData?.contractType || 'ERC20 Token');
+  const [prompt, setPrompt] = useState(initialData?.prompt || '');
 
   // Find configuration for the selected blockchain
   const activeBlockchainConfig = BLOCKCHAINS.find(b => b.id === selectedBlockchain) || BLOCKCHAINS[0];

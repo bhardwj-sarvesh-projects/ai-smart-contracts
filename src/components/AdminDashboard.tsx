@@ -118,16 +118,22 @@ export default function AdminDashboard({ theme, authedFetch, onClose }: AdminDas
     }
   };
 
-  const filteredUsers = users.filter(u => 
-    u.fullName.toLowerCase().includes(userSearch.toLowerCase()) || 
-    u.email.toLowerCase().includes(userSearch.toLowerCase())
-  );
+  const filteredUsers = (users || []).filter(u => {
+    if (!u) return false;
+    const fullName = String(u.fullName || 'Registered User').toLowerCase();
+    const email = String(u.email || '').toLowerCase();
+    const search = (userSearch || '').toLowerCase();
+    return fullName.includes(search) || email.includes(search);
+  });
 
-  const filteredProjects = projects.filter(p => 
-    p.name.toLowerCase().includes(projectSearch.toLowerCase()) || 
-    p.blockchain.toLowerCase().includes(projectSearch.toLowerCase()) ||
-    (p.contractType || '').toLowerCase().includes(projectSearch.toLowerCase())
-  );
+  const filteredProjects = (projects || []).filter(p => {
+    if (!p) return false;
+    const name = String(p.name || '').toLowerCase();
+    const blockchain = String(p.blockchain || '').toLowerCase();
+    const contractType = String(p.contractType || 'Custom Contract').toLowerCase();
+    const search = (projectSearch || '').toLowerCase();
+    return name.includes(search) || blockchain.includes(search) || contractType.includes(search);
+  });
 
   const isDark = theme === 'dark';
 
@@ -374,6 +380,7 @@ export default function AdminDashboard({ theme, authedFetch, onClose }: AdminDas
                         isDark ? 'border-slate-900 bg-slate-900/40 text-slate-400' : 'border-slate-150 bg-slate-50/50 text-slate-500'
                       }`}>
                         <th className="px-6 py-3.5">Contract Name</th>
+                        <th className="px-6 py-3.5">Owner Email</th>
                         <th className="px-6 py-3.5">Blockchain</th>
                         <th className="px-6 py-3.5">Contract Type</th>
                         <th className="px-6 py-3.5">Security Score</th>
@@ -382,53 +389,60 @@ export default function AdminDashboard({ theme, authedFetch, onClose }: AdminDas
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-900/60 text-xs">
-                      {filteredProjects.map((p) => (
-                        <tr key={p.id} className={isDark ? 'hover:bg-slate-900/20' : 'hover:bg-slate-50/20'}>
-                          <td className="px-6 py-4">
-                            <div className="font-semibold">{p.name}</div>
-                            <div className="text-[10px] text-slate-400 mt-0.5">ID: {p.id}</div>
-                          </td>
-                          <td className="px-6 py-4 uppercase font-mono text-[10px] tracking-wider text-slate-400">
-                            {p.blockchain} ({p.language})
-                          </td>
-                          <td className="px-6 py-4">
-                            {p.contractType || 'Custom Contract'}
-                          </td>
-                          <td className="px-6 py-4">
-                            {p.audit ? (
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                p.audit.score >= 85
-                                  ? 'bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400'
-                                  : p.audit.score >= 60
-                                    ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-950/40 dark:text-yellow-400'
-                                    : 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400'
-                              }`}>
-                                {p.audit.score}/100
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 font-medium">Unaudited</span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-slate-400">
-                            {new Date(p.createdAt).toLocaleDateString()}
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            <button
-                              onClick={() => setSelectedProject(p)}
-                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                                isDark 
-                                  ? 'border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800' 
-                                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                              }`}
-                            >
-                              <Eye size={13} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                      {filteredProjects.map((p) => {
+                        const ownerUser = users.find(u => u.uid === p.userId);
+                        const ownerEmail = ownerUser?.email || 'Unknown';
+                        return (
+                          <tr key={p.id} className={isDark ? 'hover:bg-slate-900/20' : 'hover:bg-slate-50/20'}>
+                            <td className="px-6 py-4">
+                              <div className="font-semibold">{p.name}</div>
+                              <div className="text-[10px] text-slate-400 mt-0.5">ID: {p.id}</div>
+                            </td>
+                            <td className="px-6 py-4 max-w-[150px] break-all leading-relaxed whitespace-normal text-slate-500 dark:text-slate-400">
+                              {ownerEmail}
+                            </td>
+                            <td className="px-6 py-4 uppercase font-mono text-[10px] tracking-wider text-slate-400">
+                              {p.blockchain} ({p.language})
+                            </td>
+                            <td className="px-6 py-4">
+                              {p.contractType || 'Custom Contract'}
+                            </td>
+                            <td className="px-6 py-4">
+                              {p.audit ? (
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  p.audit.score >= 85
+                                    ? 'bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400'
+                                    : p.audit.score >= 60
+                                      ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-950/40 dark:text-yellow-400'
+                                      : 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400'
+                                }`}>
+                                  {p.audit.score}/100
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 font-medium">Unaudited</span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-slate-400">
+                              {p.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'N/A'}
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                              <button
+                                onClick={() => setSelectedProject(p)}
+                                className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                                  isDark 
+                                    ? 'border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800' 
+                                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                                }`}
+                              >
+                                <Eye size={13} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                       {filteredProjects.length === 0 && (
                         <tr>
-                          <td colSpan={6} className="px-6 py-8 text-center text-slate-400">
+                          <td colSpan={7} className="px-6 py-8 text-center text-slate-400">
                             No generated smart contracts found.
                           </td>
                         </tr>
@@ -522,7 +536,7 @@ export default function AdminDashboard({ theme, authedFetch, onClose }: AdminDas
                     <Shield size={24} />
                   </div>
                   <div>
-                    <div className="text-2xl font-bold font-mono">{stats.avgAuditScore}/100</div>
+                    <div className="text-2xl font-bold font-mono">{(stats?.avgAuditScore ?? 0)}/100</div>
                     <div className="text-xs text-slate-400 font-medium">Average Security Audit Score</div>
                   </div>
                 </div>
@@ -532,7 +546,7 @@ export default function AdminDashboard({ theme, authedFetch, onClose }: AdminDas
                 } space-y-4`}>
                   <h3 className="text-xs font-bold uppercase tracking-wider">Blockchain Deployment Breakdown</h3>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2">
-                    {Object.entries(stats.blockchainCounts).map(([chain, count]) => (
+                    {stats?.blockchainCounts && Object.entries(stats.blockchainCounts).map(([chain, count]) => (
                       <div key={chain} className={`p-4 rounded-xl border text-center ${
                         isDark ? 'border-slate-800 bg-slate-900/20' : 'border-slate-100 bg-slate-50'
                       }`}>
@@ -541,7 +555,7 @@ export default function AdminDashboard({ theme, authedFetch, onClose }: AdminDas
                         <div className="text-[10px] text-slate-400 mt-0.5">contracts</div>
                       </div>
                     ))}
-                    {Object.keys(stats.blockchainCounts).length === 0 && (
+                    {(!stats?.blockchainCounts || Object.keys(stats.blockchainCounts).length === 0) && (
                       <div className="col-span-4 text-center text-xs text-slate-400 py-4">
                         No blockchain breakdown stats available yet.
                       </div>

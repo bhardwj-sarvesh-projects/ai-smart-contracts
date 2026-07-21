@@ -7,6 +7,7 @@ interface TemplateLibraryProps {
   onClose: () => void;
   onCloneTemplate: (templateName: string, blockchain: string, language: string, files: ProjectFile[]) => void;
   activeProject?: Project;
+  theme?: 'dark' | 'light';
 }
 
 interface PublishedTemplate {
@@ -28,7 +29,8 @@ interface PublishedTemplate {
 export default function TemplateLibrary({
   onClose,
   onCloneTemplate,
-  activeProject
+  activeProject,
+  theme = 'light'
 }: TemplateLibraryProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [favorites, setFavorites] = useState<string[]>([]);
@@ -117,28 +119,39 @@ export default function TemplateLibrary({
     setSelectedTemplate(newTemplate);
   };
 
-  const filteredTemplates = allTemplates.filter(template => {
-    const matchesSearch = template.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          template.description.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredTemplates = (allTemplates || []).filter(template => {
+    if (!template) return false;
+    const name = String(template.name || '').toLowerCase();
+    const description = String(template.description || '').toLowerCase();
+    const search = (searchTerm || '').toLowerCase();
+    const matchesSearch = name.includes(search) || description.includes(search);
     const matchesCategory = selectedCategory === 'All' || template.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
 
+  const isDark = theme === 'dark';
+
   return (
-    <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-5xl h-[85vh] overflow-hidden shadow-2xl flex">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className={`w-full max-w-5xl h-[85vh] overflow-hidden rounded-xl border shadow-2xl flex transition-colors duration-300 ${
+        isDark ? 'bg-slate-900 border-slate-800 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
+      }`}>
         
         {/* Left Side: Template Explorer */}
-        <div className="w-1/2 border-r border-slate-800 flex flex-col h-full bg-slate-950/40">
-          <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+        <div className={`w-1/2 border-r flex flex-col h-full transition-colors duration-300 ${
+          isDark ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-slate-50/40'
+        }`}>
+          <div className={`p-4 border-b flex items-center justify-between transition-colors duration-300 ${
+            isDark ? 'border-slate-800' : 'border-slate-200'
+          }`}>
             <div className="flex items-center gap-2">
-              <Layers className="w-4 h-4 text-cyan-400" />
-              <h3 className="text-xs font-bold text-white uppercase tracking-wider">Enterprise Template Library</h3>
+              <Layers className="w-4 h-4 text-cyan-500" />
+              <h3 className={`text-xs font-bold uppercase tracking-wider ${isDark ? 'text-white' : 'text-slate-900'}`}>Enterprise Template Library</h3>
             </div>
             {activeProject && (
               <button
                 onClick={() => setShowPublishForm(!showPublishForm)}
-                className="px-2.5 py-1 text-[10px] bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/40 border border-cyan-500/30 rounded font-medium transition-all"
+                className="px-2.5 py-1 text-[10px] bg-cyan-600/10 text-cyan-600 dark:text-cyan-400 dark:bg-cyan-600/20 hover:bg-cyan-600/20 dark:hover:bg-cyan-600/40 border border-cyan-500/30 rounded font-medium transition-all cursor-pointer"
                 id="btn-publish-template"
               >
                 Publish Current Workspace
@@ -148,25 +161,33 @@ export default function TemplateLibrary({
 
           {showPublishForm ? (
             <form onSubmit={handlePublish} className="p-5 space-y-4 overflow-y-auto flex-1">
-              <h4 className="text-xs font-bold text-white uppercase">Publish Active Workspace as Template</h4>
+              <h4 className={`text-xs font-bold uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>Publish Active Workspace as Template</h4>
               <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 uppercase">Template Name</label>
+                <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Template Name</label>
                 <input
                   type="text"
                   required
                   value={publishName}
                   onChange={(e) => setPublishName(e.target.value)}
                   placeholder="e.g. Multi-Sig Wallet Template"
-                  className="w-full bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                  className={`w-full rounded p-2 text-xs focus:outline-none transition-colors border ${
+                    isDark
+                      ? 'bg-slate-900 border-slate-800 text-slate-200 focus:border-cyan-500'
+                      : 'bg-slate-50 border-slate-200 text-slate-800 focus:border-cyan-500'
+                  }`}
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 uppercase">Category</label>
+                <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Category</label>
                 <select
                   value={publishCategory}
                   onChange={(e) => setPublishCategory(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
+                  className={`w-full rounded p-2 text-xs focus:outline-none transition-colors border ${
+                    isDark
+                      ? 'bg-slate-900 border-slate-800 text-slate-300 focus:border-cyan-500'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 focus:border-cyan-500'
+                  }`}
                 >
                   {categories.filter(c => c !== 'All').map(c => (
                     <option key={c} value={c}>{c}</option>
@@ -175,13 +196,17 @@ export default function TemplateLibrary({
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 uppercase">Description</label>
+                <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Description</label>
                 <textarea
                   value={publishDescription}
                   onChange={(e) => setPublishDescription(e.target.value)}
                   rows={4}
                   placeholder="Summarize your custom contract templates, features, and optimizations..."
-                  className="w-full bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono resize-none"
+                  className={`w-full rounded p-2 text-xs focus:outline-none font-mono resize-none transition-colors border ${
+                    isDark
+                      ? 'bg-slate-900 border-slate-800 text-slate-200 focus:border-cyan-500'
+                      : 'bg-slate-50 border-slate-200 text-slate-800 focus:border-cyan-500'
+                  }`}
                 />
               </div>
 
@@ -189,13 +214,15 @@ export default function TemplateLibrary({
                 <button
                   type="button"
                   onClick={() => setShowPublishForm(false)}
-                  className="px-3 py-1.5 border border-slate-800 rounded text-xs text-slate-400"
+                  className={`px-3 py-1.5 border rounded text-xs transition-colors cursor-pointer ${
+                    isDark ? 'border-slate-800 text-slate-400 hover:bg-slate-800' : 'border-slate-200 text-slate-500 hover:bg-slate-100'
+                  }`}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-3.5 py-1.5 bg-cyan-600 text-white rounded text-xs font-semibold hover:bg-cyan-500"
+                  className="px-3.5 py-1.5 bg-cyan-600 text-white rounded text-xs font-semibold hover:bg-cyan-500 cursor-pointer"
                 >
                   Publish Template
                 </button>
@@ -204,7 +231,9 @@ export default function TemplateLibrary({
           ) : (
             <div className="flex-1 flex flex-col min-h-0">
               {/* Search and Categories bar */}
-              <div className="p-3 bg-slate-950/80 border-b border-slate-800 space-y-2">
+              <div className={`p-3 border-b space-y-2 transition-colors duration-300 ${
+                isDark ? 'bg-slate-950/80 border-slate-800' : 'bg-slate-50/85 border-slate-200'
+              }`}>
                 <div className="relative">
                   <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-500" />
                   <input
@@ -212,7 +241,11 @@ export default function TemplateLibrary({
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     placeholder="Search standard and user templates..."
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                    className={`w-full rounded-lg pl-8 pr-3 py-2 text-xs focus:outline-none transition-colors border ${
+                      isDark
+                        ? 'bg-slate-900 border-slate-800 text-slate-200 focus:border-cyan-500'
+                        : 'bg-white border-slate-200 text-slate-800 focus:border-cyan-500'
+                    }`}
                   />
                 </div>
                 {/* Horizontal Category Pill selector */}
@@ -221,10 +254,12 @@ export default function TemplateLibrary({
                     <button
                       key={cat}
                       onClick={() => setSelectedCategory(cat)}
-                      className={`px-2.5 py-1 rounded text-[10px] font-semibold flex-shrink-0 transition-colors ${
+                      className={`px-2.5 py-1 rounded text-[10px] font-semibold flex-shrink-0 transition-colors cursor-pointer ${
                         selectedCategory === cat
-                          ? 'bg-cyan-600 text-white'
-                          : 'bg-slate-900 text-slate-400 hover:text-white'
+                          ? 'bg-cyan-600 text-white shadow-sm'
+                          : isDark
+                          ? 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800'
+                          : 'bg-slate-100 text-slate-600 hover:text-slate-900 hover:bg-slate-200'
                       }`}
                     >
                       {cat}
@@ -246,21 +281,23 @@ export default function TemplateLibrary({
                         onClick={() => setSelectedTemplate(template)}
                         className={`p-3 border rounded-lg cursor-pointer transition-all flex items-start justify-between gap-2 ${
                           selectedTemplate?.id === template.id
-                            ? 'bg-slate-850/80 border-cyan-500 shadow-md'
-                            : 'bg-slate-900/40 border-slate-800/80 hover:border-slate-700'
+                            ? 'border-cyan-500 shadow-md bg-cyan-500/5 dark:bg-slate-850/80'
+                            : isDark
+                            ? 'bg-slate-900/40 border-slate-800/80 hover:border-slate-700'
+                            : 'bg-white border-slate-200 hover:border-slate-350 hover:shadow-sm'
                         }`}
                       >
                         <div className="space-y-1 truncate">
                           <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-bold text-white">{template.name}</span>
+                            <span className={`text-xs font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{template.name}</span>
                             {template.isUserPublished && (
                               <span className="bg-emerald-500/10 text-emerald-400 text-[8px] font-bold px-1 py-0.2 rounded border border-emerald-500/20">
                                 USER
                               </span>
                             )}
                           </div>
-                          <p className="text-[10px] text-slate-400 truncate leading-relaxed">{template.description}</p>
-                          <div className="flex items-center gap-2 text-[9px] font-mono text-slate-500">
+                          <p className={`text-[10px] truncate leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>{template.description}</p>
+                          <div className={`flex items-center gap-2 text-[9px] font-mono ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
                             <span className="uppercase">{template.blockchain}</span>
                             <span>•</span>
                             <span className="uppercase">{template.language}</span>
@@ -271,16 +308,20 @@ export default function TemplateLibrary({
                         <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
                           <button
                             onClick={() => toggleFavorite(template.id)}
-                            className={`p-1 rounded hover:bg-slate-800 transition-colors ${isFav ? 'text-rose-500' : 'text-slate-500 hover:text-rose-400'}`}
+                            className={`p-1 rounded transition-colors cursor-pointer ${
+                              isFav ? 'text-rose-500' : isDark ? 'text-slate-500 hover:text-rose-400 hover:bg-slate-800' : 'text-slate-400 hover:text-rose-500 hover:bg-slate-100'
+                            }`}
                           >
                             <Heart className="w-3.5 h-3.5 fill-current" />
                           </button>
                           <button
                             onClick={() => handleCopyLink(template.id)}
-                            className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-white transition-colors"
+                            className={`p-1 rounded transition-colors cursor-pointer ${
+                              isDark ? 'text-slate-500 hover:text-white hover:bg-slate-800' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-100'
+                            }`}
                             title="Share Template Link"
                           >
-                            {copiedId === template.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Share2 className="w-3.5 h-3.5" />}
+                            {copiedId === template.id ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Share2 className="w-3.5 h-3.5" />}
                           </button>
                         </div>
                       </div>
@@ -293,14 +334,18 @@ export default function TemplateLibrary({
         </div>
 
         {/* Right Side: Template Detail Pane */}
-        <div className="w-1/2 flex flex-col h-full bg-slate-950/80 justify-between">
+        <div className={`w-1/2 flex flex-col h-full justify-between transition-colors duration-300 ${
+          isDark ? 'bg-slate-950/80 text-slate-200' : 'bg-slate-50/10 text-slate-800'
+        }`}>
           {selectedTemplate ? (
             <div className="flex flex-col h-full">
               {/* Template Detail Header */}
-              <div className="p-4 border-b border-slate-800 bg-slate-950/40 flex items-center justify-between">
+              <div className={`p-4 border-b flex items-center justify-between transition-colors duration-300 ${
+                isDark ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-slate-50/50'
+              }`}>
                 <div>
-                  <h3 className="text-sm font-bold text-white">{selectedTemplate.name}</h3>
-                  <p className="text-[10px] text-slate-400">{selectedTemplate.description}</p>
+                  <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{selectedTemplate.name}</h3>
+                  <p className="text-[10px] text-slate-400 dark:text-slate-500">{selectedTemplate.description}</p>
                 </div>
                 <button
                   onClick={() => onCloneTemplate(
@@ -309,7 +354,7 @@ export default function TemplateLibrary({
                     selectedTemplate.language,
                     selectedTemplate.files
                   )}
-                  className="px-3.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-semibold shadow-md flex items-center gap-1 transition-all"
+                  className="px-3.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-semibold shadow-md flex items-center gap-1 transition-all cursor-pointer"
                   id="btn-clone-template-run"
                 >
                   <Play className="w-3.5 h-3.5 fill-current" />
@@ -320,63 +365,79 @@ export default function TemplateLibrary({
               {/* Detail Tabs / Expandable Specs */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs font-mono">
                 <div className="space-y-1.5">
-                  <div className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <div className="text-[10px] text-cyan-600 dark:text-cyan-400 font-bold uppercase tracking-wider flex items-center gap-1">
                     <Sparkles className="w-3.5 h-3.5" /> Architecture Specification
                   </div>
-                  <div className="p-3 bg-slate-900/60 border border-slate-850 rounded text-slate-300 leading-relaxed text-[11px]">
+                  <div className={`p-3 rounded leading-relaxed text-[11px] border transition-colors ${
+                    isDark ? 'bg-slate-900/60 border-slate-850 text-slate-300' : 'bg-white border-slate-200 text-slate-700 shadow-sm'
+                  }`}>
                     {selectedTemplate.architecture}
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
-                  <div className="text-[10px] text-sky-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <div className="text-[10px] text-sky-600 dark:text-sky-400 font-bold uppercase tracking-wider flex items-center gap-1">
                     <Layers className="w-3.5 h-3.5" /> Planned Folder Structure
                   </div>
-                  <pre className="p-3 bg-slate-900/60 border border-slate-850 rounded text-slate-300 leading-relaxed text-[10px] whitespace-pre-wrap">
+                  <pre className={`p-3 rounded leading-relaxed text-[10px] whitespace-pre-wrap border transition-colors ${
+                    isDark ? 'bg-slate-900/60 border-slate-850 text-slate-300' : 'bg-white border-slate-200 text-slate-700 shadow-sm'
+                  }`}>
                     {selectedTemplate.folderStructure}
                   </pre>
                 </div>
 
                 <div className="space-y-1.5">
-                  <div className="text-[10px] text-purple-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <div className="text-[10px] text-purple-600 dark:text-purple-400 font-bold uppercase tracking-wider flex items-center gap-1">
                     <FileCode className="w-3.5 h-3.5" /> Core Unit Tests
                   </div>
-                  <div className="p-3 bg-slate-900/60 border border-slate-850 rounded text-slate-300 leading-relaxed text-[11px]">
+                  <div className={`p-3 rounded leading-relaxed text-[11px] border transition-colors ${
+                    isDark ? 'bg-slate-900/60 border-slate-850 text-slate-300' : 'bg-white border-slate-200 text-slate-700 shadow-sm'
+                  }`}>
                     {selectedTemplate.tests}
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
-                  <div className="text-[10px] text-amber-500 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <div className="text-[10px] text-amber-600 dark:text-amber-500 font-bold uppercase tracking-wider flex items-center gap-1">
                     <Download className="w-3.5 h-3.5" /> Deployment Pipelines
                   </div>
-                  <div className="p-3 bg-slate-900/60 border border-slate-850 rounded text-slate-300 leading-relaxed text-[11px]">
+                  <div className={`p-3 rounded leading-relaxed text-[11px] border transition-colors ${
+                    isDark ? 'bg-slate-900/60 border-slate-850 text-slate-300' : 'bg-white border-slate-200 text-slate-700 shadow-sm'
+                  }`}>
                     {selectedTemplate.deployment}
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
-                  <div className="text-[10px] text-rose-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <div className="text-[10px] text-rose-600 dark:text-rose-400 font-bold uppercase tracking-wider flex items-center gap-1">
                     <ShieldCheck className="w-3.5 h-3.5" /> Mandatory Audit & Security Notes
                   </div>
-                  <div className="p-3 bg-rose-500/5 border border-rose-500/10 rounded text-slate-300 leading-relaxed text-[11px]">
+                  <div className={`p-3 rounded leading-relaxed text-[11px] border transition-colors ${
+                    isDark ? 'bg-rose-500/5 border-rose-500/10 text-slate-300' : 'bg-rose-50 border-rose-100 text-rose-800 shadow-sm'
+                  }`}>
                     {selectedTemplate.securityNotes}
                   </div>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-500 font-mono text-xs space-y-2">
-              <Layers className="w-8 h-8 text-slate-600 animate-pulse" />
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 dark:text-slate-500 font-mono text-xs space-y-2">
+              <Layers className="w-8 h-8 text-slate-400 dark:text-slate-600 animate-pulse" />
               <p>Select a smart contract blueprint template from the list to inspect its technical architecture, security auditing checks, and code modules.</p>
             </div>
           )}
 
           {/* Footer controls */}
-          <div className="p-3 border-t border-slate-800 bg-slate-950/40 flex justify-end">
+          <div className={`p-3 border-t flex justify-end transition-colors ${
+            isDark ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-slate-50/50'
+          }`}>
             <button
               onClick={onClose}
-              className="px-4 py-1.5 border border-slate-800 hover:bg-slate-800 rounded text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+              className={`px-4 py-1.5 border rounded text-xs font-semibold transition-colors cursor-pointer ${
+                isDark
+                  ? 'border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white'
+                  : 'border-slate-200 hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+              }`}
             >
               Close Library
             </button>

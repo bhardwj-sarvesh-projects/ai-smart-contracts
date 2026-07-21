@@ -51,10 +51,13 @@ export default function VersionHistory({
     setRenamingId(null);
   };
 
-  const filteredVersions = versions.filter(v =>
-    v.prompt.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    v.summary.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredVersions = (versions || []).filter(v => {
+    if (!v) return false;
+    const prompt = String(v.prompt || '').toLowerCase();
+    const summary = String(v.summary || '').toLowerCase();
+    const search = (searchTerm || '').toLowerCase();
+    return prompt.includes(search) || summary.includes(search);
+  });
 
   const getNormalizedContent = (fileContent: any): string => {
     // 1. Find every component that renders: generatedContract, aiResponse, response, contract, result

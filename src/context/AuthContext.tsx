@@ -10,6 +10,8 @@ interface AuthContextType {
   signup: (email: string, password: string, fullName: string, securityQuestion: string, securityAnswer: string) => Promise<UserProfile>;
   logout: () => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
+  updateProfileName: (newName: string) => Promise<void>;
+  changePassword: (newPassword: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -119,8 +121,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const updateProfileName = async (newName: string): Promise<void> => {
+    if (!user) throw new Error('No user is currently authenticated.');
+    try {
+      const updatedProfile = await AuthService.updateProfileName(user.uid, newName);
+      setUser(updatedProfile);
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  const changePassword = async (newPassword: string): Promise<void> => {
+    try {
+      await AuthService.changePassword(newPassword);
+    } catch (error) {
+      throw error;
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, signup, logout, forgotPassword }}>
+    <AuthContext.Provider value={{ user, loading, login, signup, logout, forgotPassword, updateProfileName, changePassword }}>
       {children}
     </AuthContext.Provider>
   );

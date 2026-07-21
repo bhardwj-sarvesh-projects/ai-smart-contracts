@@ -70,10 +70,13 @@ export default function DashboardView({
 
   // Filtered projects
   const filteredProjects = useMemo(() => {
-    return projects.filter(p => {
-      const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (p.description || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.contractType.toLowerCase().includes(searchQuery.toLowerCase());
+    return (projects || []).filter(p => {
+      if (!p) return false;
+      const name = String(p.name || '').toLowerCase();
+      const description = String(p.description || '').toLowerCase();
+      const contractType = String(p.contractType || '').toLowerCase();
+      const search = (searchQuery || '').toLowerCase();
+      const matchesSearch = name.includes(search) || description.includes(search) || contractType.includes(search);
         
       const matchesBlockchain = blockchainFilter === 'all' || p.blockchain === blockchainFilter;
       

@@ -432,6 +432,64 @@ export const AuthService = {
       }
       throw new Error(err.message || 'Failed to verify security answer.');
     }
+  },
+
+  /**
+   * Update full name / display name in user profile
+   */
+  async updateProfileName(uid: string, newFullName: string): Promise<UserProfile> {
+    if (!isFirebaseConfigured || !db) {
+      const offlineDb = JSON.parse(localStorage.getItem('offline_users_db') || '{}');
+      if (offlineDb[uid]) {
+        offlineDb[uid].fullName = newFullName;
+        localStorage.setItem('offline_users_db', JSON.stringify(offlineDb));
+      }
+      const currentOffline = JSON.parse(localStorage.getItem('offline_user') || '{}');
+      if (currentOffline && currentOffline.uid === uid) {
+        currentOffline.fullName = newFullName;
+        localStorage.setItem('offline_user', JSON.stringify(currentOffline));
+      }
+      return offlineDb[uid] || currentOffline;
+    }
+    
+    try {
+      const userDocRef = doc(db, 'users', uid);
+      await updateDoc(userDocRef, { fullName: newFullName });
+      
+      if (auth && auth.currentUser) {
+        const { updateProfile } = await import('firebase/auth');
+        await updateProfile(auth.currentUser, { displayName: newFullName });
+      }
+      
+      const updatedProfile = await this.getUserProfile(uid);
+      if (updatedProfile) {
+        localStorage.setItem(`user_profile_${uid}`, JSON.stringify(updatedProfile));
+        return updatedProfile;
+      }
+      throw new Error('User profile not found after update');
+    } catch (err: any) {
+      throw new Error(err.message || 'Failed to update display name.');
+    }
+  },
+
+  /**
+   * Change password for the current authenticated user
+   */
+  async changePassword(password: string): Promise<void> {
+    if (!isFirebaseConfigured || !auth) {
+      console.warn('[OFFLINE_MODE] Password change simulation');
+      return;
+    }
+    try {
+      if (auth.currentUser) {
+        const { updatePassword } = await import('firebase/auth');
+        await updatePassword(auth.currentUser, password);
+      } else {
+        throw new Error('No user is currently authenticated.');
+      }
+    } catch (err: any) {
+      throw new Error(err.message || 'Failed to update password.');
+    }
   }
 };
 

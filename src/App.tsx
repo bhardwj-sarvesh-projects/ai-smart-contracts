@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import Header from './components/Header';
 import FileTree from './components/FileTree';
 import CodeWorkspace from './components/CodeWorkspace';
@@ -6,13 +7,15 @@ import RightAssistant from './components/RightAssistant';
 import BlockchainSelector from './components/BlockchainSelector';
 import TemplateLibrary from './components/TemplateLibrary';
 import ImplementationPlanView from './components/ImplementationPlanView';
+import GenerationLoader from './components/GenerationLoader';
+import logo from './assets/logo.jpg';
 import VersionHistory from './components/VersionHistory';
 import PipelineDashboard from './components/PipelineDashboard';
 import DashboardView from './components/DashboardView';
 import AuditingHub from './components/AuditingHub';
 import AdminDashboard from './components/AdminDashboard';
 import { Project, ProjectFile, Vulnerability, Version } from './types';
-import { Layers, Sparkles, RefreshCw, AlertCircle, Library, FolderOpen, Code2 } from 'lucide-react';
+import { Layers, Sparkles, RefreshCw, AlertCircle, Library, FolderOpen, Code2, Zap, X } from 'lucide-react';
 import JSZip from 'jszip';
 import AuthView from './components/AuthView';
 import SettingsModal from './components/SettingsModal';
@@ -24,10 +27,10 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [generationError, setGenerationError] = useState<Error | null>(null);
-
-  if (generationError) {
-    throw generationError;
-  }
+  
+  // Premium generation loader states
+  const [isGeneratingLoaderOpen, setIsGeneratingLoaderOpen] = useState(false);
+  const [loaderType, setLoaderType] = useState<'planning' | 'workspace'>('planning');
 
   // Active Main Tab/View State
   const [activeTab, setActiveTab] = useState<'dashboard' | 'workspace' | 'auditing' | 'admin'>('dashboard');
@@ -35,7 +38,8 @@ export default function App() {
   // Advanced toggles
   const [showTemplateLibrary, setShowTemplateLibrary] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [showDeployPanel, setShowDeployPanel] = useState(false);
+  const [theme, setTheme] = useState<'dark' | 'light'>('light');
   const [activeWorkspaceSubTab, setActiveWorkspaceSubTab] = useState<'files' | 'editor' | 'assistant'>('editor');
 
   // Plan generation state
@@ -326,6 +330,10 @@ export default function App() {
     prompt: string;
   }) => {
     setIsProcessing(true);
+    setPendingConfig(configData);
+    setGenerationError(null);
+    setLoaderType('planning');
+    setIsGeneratingLoaderOpen(true);
     setShowNewProjectModal(false);
 
     try {
@@ -347,11 +355,15 @@ export default function App() {
       }
 
       const planData = await response.json();
+      
+      // Let steps animate naturally for a brief moment to feel premium
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
       setActivePlan(planData);
-      setPendingConfig(configData);
+      setIsGeneratingLoaderOpen(false);
     } catch (err: any) {
       console.error('Failed to generate pre-plan', err);
-      alert(`AI Plan Generation Failed: ${err.message || String(err)}`);
+      setGenerationError(err);
     } finally {
       setIsProcessing(false);
     }
@@ -361,10 +373,14 @@ export default function App() {
   const handleApproveAndGeneratePlan = async (approvedPlan: any, configData: any) => {
     setIsProcessing(true);
     setActivePlan(null);
+    setGenerationError(null);
+    setLoaderType('workspace');
+    setIsGeneratingLoaderOpen(true);
 
     const config = configData || pendingConfig;
     if (!config) {
       console.warn('[CONTRACT GENERATION] Missing pending configuration context.');
+      setGenerationError(new Error("Missing pending configuration context. Please retry configuring your project."));
       setIsProcessing(false);
       return;
     }
@@ -456,18 +472,21 @@ export default function App() {
 
       setProjects((prev) => [...prev, newProj]);
       setActiveProjectId(newProj.id);
+      
+      // Let loading transitions complete beautifully
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
       setActiveTab('workspace');
+      setIsGeneratingLoaderOpen(false);
+      setPendingConfig(null);
 
       // Step 9: Contract rendered
       console.log("[CONTRACT GENERATION STEP] Contract rendered");
     } catch (err: any) {
       console.error('[CONTRACT GENERATION EXCEPTION]', err);
-      // Store in state to propagate error to global React Error Boundary (forces rendering crash detection)
       setGenerationError(err);
-      throw err;
     } finally {
       setIsProcessing(false);
-      setPendingConfig(null);
     }
   };
 
@@ -556,6 +575,22 @@ export default function App() {
       alert(`Failed to clone template: ${err.message || String(err)}`);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleUpdateProjectSettings = async (id: string, updates: Partial<Project>) => {
+    const project = projects.find(p => p.id === id);
+    if (!project) return;
+    const updated = { ...project, ...updates };
+    setProjects(prev => prev.map(p => p.id === id ? updated : p));
+    try {
+      await authedFetch(`/api/projects/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated)
+      });
+    } catch (err) {
+      console.error('Failed to update project settings:', err);
     }
   };
 
@@ -772,6 +807,7 @@ export default function App() {
         projects={projects}
         activeProject={activeProject}
         onSelectProject={handleSelectProject}
+        onUpdateProjectSettings={handleUpdateProjectSettings}
         onNewProjectClick={() => setShowNewProjectModal(true)}
         onExportZIP={handleExportZIP}
         onAuditCodebase={handleAuditCodebase}
@@ -892,6 +928,7 @@ export default function App() {
                     onSelectFile={handleSelectFile}
                     onAddFile={handleAddFile}
                     onDeleteFile={handleDeleteFile}
+                    onOpenDeployPanel={() => setShowDeployPanel(true)}
                   />
                 )}
               </div>
@@ -901,32 +938,12 @@ export default function App() {
                 activeWorkspaceSubTab === 'editor' ? 'flex' : 'hidden lg:flex'
               }`}>
                 {/* Upper Editor Workspace */}
-                <div className="flex-1 min-h-0">
+                <div className="flex-1 min-h-0 flex flex-col">
                   <CodeWorkspace
                     files={activeProject.files}
                     activeFilePath={activeProject.activeFilePath}
                     onFileContentChange={handleFileContentChange}
                     onSelectFile={handleSelectFile}
-                  />
-                </div>
-
-                {/* Advanced 10-stage deployment compiler pipeline replacement */}
-                <div className="h-72 flex-shrink-0">
-                  <PipelineDashboard
-                    project={activeProject}
-                    onUpdateFiles={(newFiles) => {
-                      const updated = { ...activeProject, files: newFiles };
-                      setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
-                      authedFetch(`/api/projects/${activeProject.id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(updated)
-                      });
-                    }}
-                    onCompile={handleCompile}
-                    onDeploy={handleDeploy}
-                    isCompiling={isCompiling}
-                    isDeploying={isDeploying}
                   />
                 </div>
               </div>
@@ -953,8 +970,8 @@ export default function App() {
         ) : (
           /* Empty Workspace Splash Screen */
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500 to-indigo-600 shadow-xl animate-bounce">
-              <Layers className="w-7 h-7 text-white" />
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-900 border border-slate-800 shadow-xl animate-bounce overflow-hidden">
+              <img src={logo} alt="AI Contracts Logo" className="w-10 h-10 object-contain" />
             </div>
             <div className="space-y-1.5 max-w-md">
               <h2 className="text-lg font-bold uppercase tracking-wider">SmartContract.ai Studio</h2>
@@ -987,6 +1004,7 @@ export default function App() {
           onClose={() => setShowNewProjectModal(false)}
           onCreateProject={handleCreateNewProject}
           isGenerating={isProcessing}
+          initialData={pendingConfig}
         />
       )}
 
@@ -996,6 +1014,7 @@ export default function App() {
           onClose={() => setShowTemplateLibrary(false)}
           onCloneTemplate={handleCloneTemplate}
           activeProject={activeProject}
+          theme={theme}
         />
       )}
 
@@ -1011,6 +1030,28 @@ export default function App() {
         />
       )}
 
+      {/* Premium Multi-stage Generation Loader & Error Console */}
+      <GenerationLoader
+        isOpen={isGeneratingLoaderOpen}
+        type={loaderType}
+        error={generationError}
+        blockchain={pendingConfig?.blockchain}
+        language={pendingConfig?.language}
+        contractType={pendingConfig?.contractType}
+        onCloseError={() => {
+          setIsGeneratingLoaderOpen(false);
+          setGenerationError(null);
+          setShowNewProjectModal(true); // Re-open configuration modal preserving prompt!
+        }}
+        onRetry={() => {
+          if (loaderType === 'planning') {
+            if (pendingConfig) handleCreateNewProject(pendingConfig);
+          } else {
+            if (activePlan) handleApproveAndGeneratePlan(activePlan, pendingConfig);
+          }
+        }}
+      />
+
       {/* Orchestrator Settings Modal */}
       {showSettingsModal && user && (
         <SettingsModal
@@ -1022,12 +1063,82 @@ export default function App() {
             displayName: (user as any).displayName || user.fullName || '',
             photoURL: user.photoURL || '',
           }}
+          theme={theme}
           onSettingsSaved={(prov, mod) => {
             setActiveProvider(prov);
             setActiveModel(mod);
           }}
         />
       )}
+
+      {/* Slide-in Deploy & Compile Drawer */}
+      <AnimatePresence>
+        {showDeployPanel && activeProject && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.5 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowDeployPanel(false)}
+              className="fixed inset-0 bg-black/60 z-[90] cursor-pointer"
+            />
+            {/* Drawer container */}
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 26, stiffness: 190 }}
+              className={`fixed top-0 right-0 h-full w-full sm:w-[640px] shadow-2xl z-[100] flex flex-col border-l transition-colors duration-300 ${
+                theme === 'dark' ? 'bg-slate-950 border-slate-800 text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-800'
+              }`}
+            >
+              <div className={`p-4 border-b flex items-center justify-between transition-colors ${
+                theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+              }`}>
+                <div className="flex items-center gap-2.5">
+                  <div className="p-1.5 bg-cyan-600/10 rounded-lg text-cyan-500">
+                    <Zap className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className={`text-sm font-bold ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>Pipeline Assembly & Ingress</h3>
+                    <p className="text-[10px] text-slate-400">Configure sandbox compiler environments and deploy smart contracts</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowDeployPanel(false)}
+                  className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                    theme === 'dark' 
+                      ? 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800' 
+                      : 'border-slate-200 bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+                  }`}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <PipelineDashboard
+                  project={activeProject}
+                  onUpdateFiles={(newFiles) => {
+                    const updated = { ...activeProject, files: newFiles };
+                    setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
+                    authedFetch(`/api/projects/${activeProject.id}`, {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(updated)
+                    });
+                  }}
+                  onCompile={handleCompile}
+                  onDeploy={handleDeploy}
+                  isCompiling={isCompiling}
+                  isDeploying={isDeploying}
+                  theme={theme}
+                />
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

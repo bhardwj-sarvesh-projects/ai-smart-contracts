@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Folder, FileCode, Plus, Trash2, ChevronRight, ChevronDown, RefreshCw } from 'lucide-react';
+import { Folder, FileCode, Plus, Trash2, ChevronRight, ChevronDown, RefreshCw, Zap } from 'lucide-react';
 import { ProjectFile } from '../types';
 
 interface FileTreeProps {
@@ -8,6 +8,7 @@ interface FileTreeProps {
   onSelectFile: (path: string) => void;
   onAddFile: (path: string) => void;
   onDeleteFile: (path: string) => void;
+  onOpenDeployPanel?: () => void;
 }
 
 export default function FileTree({
@@ -15,7 +16,8 @@ export default function FileTree({
   activeFilePath,
   onSelectFile,
   onAddFile,
-  onDeleteFile
+  onDeleteFile,
+  onOpenDeployPanel
 }: FileTreeProps) {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
     contracts: true,
@@ -236,6 +238,18 @@ export default function FileTree({
                 </div>
               );
             })}
+
+            {onOpenDeployPanel && (
+              <button
+                onClick={onOpenDeployPanel}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 mt-3.5 rounded-xl border border-blue-500/30 bg-blue-500/5 hover:bg-blue-500/10 text-blue-600 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 dark:text-cyan-400 cursor-pointer transition-all font-bold text-left animate-pulse"
+                style={{ animationDuration: '3s' }}
+                id="btn-sidebar-deploy-panel"
+              >
+                <Zap className="w-4 h-4 text-amber-500 shrink-0" />
+                <span className="text-xs">Deploy & Pipeline</span>
+              </button>
+            )}
           </div>
         )}
       </div>
