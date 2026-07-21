@@ -3,8 +3,18 @@ import {
   createUserWithEmailAndPassword, 
   sendPasswordResetEmail, 
   signOut as firebaseSignOut,
-  User as FirebaseUser
+  User as FirebaseUser,
+  updateProfile,
+  updatePassword
 } from 'firebase/auth';
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number = 8000, errMsg: string = "Operation timed out"): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(errMsg)), timeoutMs))
+  ]);
+}
+
 import { 
   doc, 
   getDoc, 
@@ -438,27 +448,55 @@ export const AuthService = {
    * Update full name / display name in user profile
    */
   async updateProfileName(uid: string, newFullName: string): Promise<UserProfile> {
+    const trimmed = (newFullName || '').trim();
+    if (!trimmed) {
+      throw new Error('Name cannot be empty.');
+    }
+
     if (!isFirebaseConfigured || !db) {
       const offlineDb = JSON.parse(localStorage.getItem('offline_users_db') || '{}');
-      if (offlineDb[uid]) {
-        offlineDb[uid].fullName = newFullName;
-        localStorage.setItem('offline_users_db', JSON.stringify(offlineDb));
-      }
       const currentOffline = JSON.parse(localStorage.getItem('offline_user') || '{}');
+      
+      let updatedUser = { ...currentOffline };
       if (currentOffline && currentOffline.uid === uid) {
-        currentOffline.fullName = newFullName;
-        localStorage.setItem('offline_user', JSON.stringify(currentOffline));
+        updatedUser.fullName = trimmed;
+        localStorage.setItem('offline_user', JSON.stringify(updatedUser));
       }
-      return offlineDb[uid] || currentOffline;
+      
+      if (offlineDb[uid]) {
+        offlineDb[uid].fullName = trimmed;
+      } else {
+        offlineDb[uid] = {
+          uid,
+          fullName: trimmed,
+          email: currentOffline?.email || 'user@example.com',
+          role: currentOffline?.role || 'user',
+          isActive: true,
+          createdAt: currentOffline?.createdAt || new Date().toISOString(),
+          lastLogin: currentOffline?.lastLogin || new Date().toISOString(),
+          photoURL: '',
+          preferences: {},
+          aiSettings: {}
+        };
+      }
+      localStorage.setItem('offline_users_db', JSON.stringify(offlineDb));
+      return offlineDb[uid] || updatedUser;
     }
     
     try {
       const userDocRef = doc(db, 'users', uid);
-      await updateDoc(userDocRef, { fullName: newFullName });
+      await withTimeout(
+        updateDoc(userDocRef, { fullName: trimmed }),
+        6000,
+        "Failed to update profile name in database due to a timeout. Please try again."
+      );
       
       if (auth && auth.currentUser) {
-        const { updateProfile } = await import('firebase/auth');
-        await updateProfile(auth.currentUser, { displayName: newFullName });
+        await withTimeout(
+          updateProfile(auth.currentUser, { displayName: trimmed }),
+          6000,
+          "Failed to update display name in auth service due to a timeout."
+        );
       }
       
       const updatedProfile = await this.getUserProfile(uid);
@@ -476,18 +514,36 @@ export const AuthService = {
    * Change password for the current authenticated user
    */
   async changePassword(password: string): Promise<void> {
+    const trimmed = (password || '').trim();
+    if (trimmed.length < 6) {
+      throw new Error('Password must be at least 6 characters.');
+    }
+
     if (!isFirebaseConfigured || !auth) {
       console.warn('[OFFLINE_MODE] Password change simulation');
+      const currentOffline = JSON.parse(localStorage.getItem('offline_user') || '{}');
+      const offlineDb = JSON.parse(localStorage.getItem('offline_users_db') || '{}');
+      const uid = currentOffline?.uid;
+      if (uid && offlineDb[uid]) {
+        offlineDb[uid].password = trimmed;
+        localStorage.setItem('offline_users_db', JSON.stringify(offlineDb));
+      }
       return;
     }
     try {
       if (auth.currentUser) {
-        const { updatePassword } = await import('firebase/auth');
-        await updatePassword(auth.currentUser, password);
+        await withTimeout(
+          updatePassword(auth.currentUser, trimmed),
+          8000,
+          "Failed to update password due to a timeout. If you logged in a long time ago, please log out and sign in again before changing security credentials."
+        );
       } else {
         throw new Error('No user is currently authenticated.');
       }
     } catch (err: any) {
+      if (err.code === 'auth/requires-recent-login' || String(err.message || '').includes('requires-recent-login')) {
+        throw new Error('This security operation requires recent authentication. Please log out and sign back in to change your password.');
+      }
       throw new Error(err.message || 'Failed to update password.');
     }
   }

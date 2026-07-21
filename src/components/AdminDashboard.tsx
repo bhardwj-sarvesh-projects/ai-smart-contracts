@@ -40,9 +40,10 @@ interface AdminDashboardProps {
   theme: 'dark' | 'light';
   authedFetch: (url: string, options?: RequestInit) => Promise<Response>;
   onClose: () => void;
+  showToast?: (message: string, type?: 'success' | 'error' | 'info') => void;
 }
 
-export default function AdminDashboard({ theme, authedFetch, onClose }: AdminDashboardProps) {
+export default function AdminDashboard({ theme, authedFetch, onClose, showToast }: AdminDashboardProps) {
   const [activeTab, setActiveTab] = useState<'users' | 'projects' | 'stats'>('users');
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [projects, setProjects] = useState<ProjectData[]>([]);
@@ -94,9 +95,16 @@ export default function AdminDashboard({ theme, authedFetch, onClose }: AdminDas
       if (res.ok) {
         const updated = await res.json();
         setUsers(prev => prev.map(u => u.uid === userId ? { ...u, isActive: updated.isActive } : u));
+        if (showToast) {
+          showToast(`User status updated to ${updated.isActive ? 'Active' : 'Blocked'}.`, 'success');
+        }
       }
     } catch (err) {
-      alert("Failed to modify user block status.");
+      if (showToast) {
+        showToast("Failed to modify user block status.", "error");
+      } else {
+        alert("Failed to modify user block status.");
+      }
     }
   };
 
@@ -112,9 +120,16 @@ export default function AdminDashboard({ theme, authedFetch, onClose }: AdminDas
       if (res.ok) {
         const updated = await res.json();
         setUsers(prev => prev.map(u => u.uid === userId ? { ...u, role: updated.role } : u));
+        if (showToast) {
+          showToast(`User role updated to ${updated.role}.`, 'success');
+        }
       }
     } catch (err) {
-      alert("Failed to update user role.");
+      if (showToast) {
+        showToast("Failed to update user role.", "error");
+      } else {
+        alert("Failed to update user role.");
+      }
     }
   };
 

@@ -30,6 +30,7 @@ interface HeaderProps {
   activeProvider: string;
   onOpenSettings: () => void;
   onLogout: () => void;
+  showToast?: (message: string, type?: 'success' | 'error' | 'info') => void;
 }
 
 export default function Header({
@@ -50,7 +51,8 @@ export default function Header({
   currentUser,
   activeProvider,
   onOpenSettings,
-  onLogout
+  onLogout,
+  showToast
 }: HeaderProps) {
   const { updateProfileName, changePassword } = useAuth();
   
@@ -64,8 +66,6 @@ export default function Header({
   // Profile-specific states
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [showChangeUsernameModal, setShowChangeUsernameModal] = useState(false);
-  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   
   const [newUsernameInput, setNewUsernameInput] = useState('');
   const [newPasswordInput, setNewPasswordInput] = useState('');
@@ -103,51 +103,76 @@ export default function Header({
     );
   };
 
-  const handleUpdateUsername = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newUsernameInput.trim()) return;
-    setErrorMsg('');
-    setSuccessMsg('');
-    setLoadingAction(true);
-    try {
-      await updateProfileName(newUsernameInput.trim());
-      setSuccessMsg('Username updated successfully!');
-      setTimeout(() => {
-        setShowChangeUsernameModal(false);
-        setNewUsernameInput('');
-        setSuccessMsg('');
-      }, 1500);
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to update username.');
-    } finally {
-      setLoadingAction(false);
+  // Auto-initialize profile form states
+  React.useEffect(() => {
+    if (showProfileModal && currentUser) {
+      setNewUsernameInput(getDisplayName());
+      setNewPasswordInput('');
+      setConfirmPasswordInput('');
+      setErrorMsg('');
+      setSuccessMsg('');
     }
-  };
+  }, [showProfileModal, currentUser]);
 
-  const handleChangePassword = async (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newPasswordInput !== confirmPasswordInput) {
-      setErrorMsg('Passwords do not match.');
-      return;
-    }
-    if (newPasswordInput.length < 6) {
-      setErrorMsg('Password must be at least 6 characters.');
-      return;
-    }
     setErrorMsg('');
     setSuccessMsg('');
     setLoadingAction(true);
+    
+    let nameChanged = false;
+    let passwordChanged = false;
+
     try {
-      await changePassword(newPasswordInput);
-      setSuccessMsg('Password changed successfully!');
+      // 1. Update Display Name if changed
+      const trimmedName = newUsernameInput.trim();
+      const currentDisplayName = getDisplayName();
+      if (trimmedName && trimmedName !== currentDisplayName) {
+        await updateProfileName(trimmedName);
+        nameChanged = true;
+      }
+
+      // 2. Change password if fields are filled
+      if (newPasswordInput || confirmPasswordInput) {
+        if (newPasswordInput !== confirmPasswordInput) {
+          throw new Error('Passwords do not match.');
+        }
+        if (newPasswordInput.length < 6) {
+          throw new Error('Password must be at least 6 characters.');
+        }
+        await changePassword(newPasswordInput);
+        passwordChanged = true;
+      }
+
+      // Successful completion
+      let msg = 'Profile settings updated successfully!';
+      if (nameChanged && passwordChanged) {
+        msg = 'Display name and password updated successfully!';
+      } else if (nameChanged) {
+        msg = 'Display name updated successfully!';
+      } else if (passwordChanged) {
+        msg = 'Password updated successfully!';
+      } else {
+        msg = 'Profile settings saved.';
+      }
+
+      if (showToast) {
+        showToast(msg, 'success');
+      } else {
+        setSuccessMsg(msg);
+      }
+
+      setNewPasswordInput('');
+      setConfirmPasswordInput('');
+
+      // Auto close after brief moment
       setTimeout(() => {
-        setShowChangePasswordModal(false);
-        setNewPasswordInput('');
-        setConfirmPasswordInput('');
+        setShowProfileModal(false);
         setSuccessMsg('');
       }, 1500);
+
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to change password.');
+      setErrorMsg(err.message || 'Failed to update profile settings.');
     } finally {
       setLoadingAction(false);
     }
@@ -168,10 +193,8 @@ export default function Header({
   const primaryNavItems = [
     { id: 'dashboard', name: 'Dashboard', icon: Home, action: () => onChangeTab('dashboard') },
     { id: 'workspace', name: 'Projects', icon: Code2, action: () => onChangeTab('workspace') },
-    { id: 'templates', name: 'Templates', icon: Library, action: onToggleTemplateLibrary },
     { id: 'auditing', name: 'Audit', icon: Shield, action: () => onChangeTab('auditing') },
-    { id: 'deploy', name: 'Deploy', icon: Zap, action: () => onChangeTab('workspace') },
-    { id: 'settings', name: 'Settings', icon: Sliders, action: onOpenSettings },
+    { id: 'templates', name: 'Templates', icon: Library, action: onToggleTemplateLibrary },
   ];
 
   // Find configuration for active project blockchain
@@ -263,29 +286,31 @@ export default function Header({
               </button>
             );
           })}
-          {isAdmin && (
-            <button
-              onClick={() => onChangeTab('admin')}
-              id="primary-nav-admin"
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                activeTab === 'admin'
-                  ? isDark
-                    ? 'bg-slate-900 text-rose-400 font-bold border border-slate-800'
-                    : 'bg-rose-50 text-rose-600 font-bold border border-rose-100'
-                  : isDark
-                  ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <ShieldAlert className="w-3.5 h-3.5" />
-              Admin
-            </button>
-          )}
         </nav>
 
         {/* Right Section Tools */}
         <div className="hidden md:flex items-center gap-3">
           
+          {/* Admin panel navigation button */}
+          {isAdmin && (
+            <button
+              onClick={() => onChangeTab('admin')}
+              id="primary-nav-admin"
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                activeTab === 'admin'
+                  ? isDark
+                    ? 'bg-slate-900 text-rose-400 border border-slate-800'
+                    : 'bg-rose-50 text-rose-600 border border-rose-100'
+                  : isDark
+                  ? 'text-slate-400 border border-slate-800 hover:text-slate-200 hover:bg-slate-900/40 bg-slate-900/30'
+                  : 'text-slate-600 border border-slate-200 hover:text-slate-900 hover:bg-slate-50 bg-slate-50/50'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
+              Admin
+            </button>
+          )}
+
           {/* Theme Mode Toggle */}
           <button
             onClick={onToggleTheme}
@@ -418,28 +443,6 @@ export default function Header({
                       >
                         <User className="w-3.5 h-3.5 text-blue-500" />
                         Profile Settings
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          setShowProfileDropdown(false);
-                          setShowChangeUsernameModal(true);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-900 cursor-pointer"
-                      >
-                        <Code2 className="w-3.5 h-3.5 text-emerald-500" />
-                        Change Username
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          setShowProfileDropdown(false);
-                          setShowChangePasswordModal(true);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-900 cursor-pointer"
-                      >
-                        <Shield className="w-3.5 h-3.5 text-purple-500" />
-                        Change Password
                       </button>
 
                       <button
@@ -858,37 +861,7 @@ export default function Header({
                     }`}
                   >
                     <User className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                    <span>Profile Info</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setMobileMenuOpen(false);
-                      setShowChangeUsernameModal(true);
-                    }}
-                    className={`p-2.5 rounded-lg border text-left font-bold flex items-center gap-2 transition-colors cursor-pointer ${
-                      isDark 
-                        ? 'border-slate-800 bg-slate-900/60 text-slate-300 hover:bg-slate-800' 
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    <Code2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                    <span>Username</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setMobileMenuOpen(false);
-                      setShowChangePasswordModal(true);
-                    }}
-                    className={`p-2.5 rounded-lg border text-left font-bold flex items-center gap-2 transition-colors cursor-pointer ${
-                      isDark 
-                        ? 'border-slate-800 bg-slate-900/60 text-slate-300 hover:bg-slate-800' 
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    <Shield className="w-3.5 h-3.5 text-purple-500 shrink-0" />
-                    <span>Password</span>
+                    <span>Profile Settings</span>
                   </button>
 
                   <button
@@ -903,7 +876,7 @@ export default function Header({
                     }`}
                   >
                     <Settings2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                    <span>Global Config</span>
+                    <span>Global Settings</span>
                   </button>
                 </div>
               </div>
@@ -977,155 +950,90 @@ export default function Header({
                 </button>
               </div>
 
-              {/* Profile Details Grid */}
-              <div className="space-y-4">
+              {/* Profile details and edit form combined */}
+              <form onSubmit={handleSaveProfile} className="space-y-4">
+                
+                {/* Center avatar & high-contrast profile details */}
                 <div className="flex items-center gap-4 p-3.5 rounded-xl border border-dashed dark:border-slate-850/60 bg-slate-50/50 dark:bg-slate-900/10">
                   {renderProfessionalAvatar(currentUser?.uid || '1', getDisplayName())}
-                  <div>
+                  <div className="flex-1">
                     <h4 className={`text-xs font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>{getDisplayName()}</h4>
                     <p className="text-[9px] text-slate-400 mt-0.5 uppercase tracking-wider font-extrabold">{currentUser?.role || 'Developer'}</p>
                   </div>
+                  <div className="text-right text-[9px] text-slate-400 font-mono">
+                    <div>Since: {currentUser?.createdAt ? new Date(currentUser.createdAt).toLocaleDateString() : 'N/A'}</div>
+                    <div className="mt-0.5">Active: {currentUser?.lastLogin ? new Date(currentUser.lastLogin).toLocaleDateString() : 'N/A'}</div>
+                  </div>
                 </div>
 
-                <div className="space-y-2.5 text-xs">
+                {/* Grid layout for structured form inputs */}
+                <div className="space-y-3.5">
+                  
+                  {/* Display Name Input */}
                   <div>
-                    <span className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">Email Address</span>
+                    <label className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">Display Name / Username</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Enter your display name"
+                      value={newUsernameInput}
+                      onChange={(e) => setNewUsernameInput(e.target.value)}
+                      className={`w-full mt-1 px-3.5 py-2.5 rounded-xl border text-xs focus:outline-none focus:ring-1 transition-all ${
+                        isDark 
+                          ? 'bg-slate-900 border-slate-800 focus:border-cyan-500 focus:ring-cyan-500/30' 
+                          : 'bg-white border-slate-200 focus:border-blue-500 focus:ring-blue-500/20'
+                      }`}
+                    />
+                  </div>
+
+                  {/* Read-only metadata */}
+                  <div>
+                    <label className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">Primary Contact Email</label>
                     <div className={`mt-1 p-2.5 rounded-lg border font-mono text-[11px] ${
-                      isDark ? 'bg-slate-900/50 border-slate-850 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-500'
+                      isDark ? 'bg-slate-900/40 border-slate-850 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-500'
                     }`}>
                       {currentUser?.email}
                     </div>
                   </div>
 
-                  <div>
-                    <span className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">Security Question</span>
-                    <div className={`mt-1 p-2.5 rounded-lg border ${
-                      isDark ? 'bg-slate-900/50 border-slate-850 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-500'
-                    }`}>
-                      {currentUser?.securityQuestion || 'No security question configured'}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3.5">
-                    <div>
-                      <span className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">Member Since</span>
-                      <div className={`mt-1 p-2.5 rounded-lg border font-mono text-[10px] ${
-                        isDark ? 'bg-slate-900/50 border-slate-850 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-500'
-                      }`}>
-                        {currentUser?.createdAt ? new Date(currentUser.createdAt).toLocaleDateString() : 'N/A'}
+                  {/* Password section header */}
+                  <div className="pt-1 border-t border-slate-100 dark:border-slate-900">
+                    <span className="text-[10px] font-bold tracking-wide uppercase text-slate-400 block mb-2">Update Security / Password</span>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">New Password</label>
+                        <input
+                          type="password"
+                          placeholder="Min 6 characters"
+                          value={newPasswordInput}
+                          onChange={(e) => setNewPasswordInput(e.target.value)}
+                          className={`w-full mt-1 px-3 py-2 rounded-xl border text-xs focus:outline-none focus:ring-1 transition-all ${
+                            isDark 
+                              ? 'bg-slate-900 border-slate-800 focus:border-cyan-500 focus:ring-cyan-500/30' 
+                              : 'bg-white border-slate-200 focus:border-blue-500 focus:ring-blue-500/20'
+                          }`}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">Confirm Password</label>
+                        <input
+                          type="password"
+                          placeholder="Re-enter password"
+                          value={confirmPasswordInput}
+                          onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                          className={`w-full mt-1 px-3 py-2 rounded-xl border text-xs focus:outline-none focus:ring-1 transition-all ${
+                            isDark 
+                              ? 'bg-slate-900 border-slate-800 focus:border-cyan-500 focus:ring-cyan-500/30' 
+                              : 'bg-white border-slate-200 focus:border-blue-500 focus:ring-blue-500/20'
+                          }`}
+                        />
                       </div>
                     </div>
-                    <div>
-                      <span className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">Last Activity</span>
-                      <div className={`mt-1 p-2.5 rounded-lg border font-mono text-[10px] ${
-                        isDark ? 'bg-slate-900/50 border-slate-850 text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-500'
-                      }`}>
-                        {currentUser?.lastLogin ? new Date(currentUser.lastLogin).toLocaleDateString() : 'N/A'}
-                      </div>
-                    </div>
                   </div>
+
                 </div>
 
-                <div className="pt-2 flex gap-2">
-                  <button
-                    onClick={() => {
-                      setShowProfileModal(false);
-                      setShowChangeUsernameModal(true);
-                    }}
-                    className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
-                      isDark 
-                        ? 'border-slate-800 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-850' 
-                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    Edit Username
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowProfileModal(false);
-                      setShowChangePasswordModal(true);
-                    }}
-                    className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
-                      isDark 
-                        ? 'border-slate-800 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-850' 
-                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    Change Password
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* --- CHANGE USERNAME MODAL --- */}
-      <AnimatePresence>
-        {showChangeUsernameModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 0.5 }}
-              exit={{ opacity: 0 }}
-              onClick={() => {
-                setShowChangeUsernameModal(false);
-                setErrorMsg('');
-                setSuccessMsg('');
-              }}
-              className="fixed inset-0 bg-black/60 cursor-pointer"
-            />
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className={`relative w-full max-w-sm rounded-2xl border p-6 shadow-2xl z-10 transition-colors duration-300 ${
-                isDark ? 'bg-slate-950 border-slate-850 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-5">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-1.5 bg-emerald-500/10 text-emerald-500 rounded-lg">
-                    <Code2 className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>Change Username</h3>
-                    <p className="text-[10px] text-slate-400">Update your public profile display name</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => {
-                    setShowChangeUsernameModal(false);
-                    setErrorMsg('');
-                    setSuccessMsg('');
-                  }}
-                  className={`p-1 rounded-lg border transition-all cursor-pointer ${
-                    isDark 
-                      ? 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white' 
-                      : 'border-slate-200 bg-white text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <form onSubmit={handleUpdateUsername} className="space-y-4">
-                <div>
-                  <label className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">New Display Name</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Enter your new name"
-                    value={newUsernameInput}
-                    onChange={(e) => setNewUsernameInput(e.target.value)}
-                    className={`w-full mt-1 px-3.5 py-2.5 rounded-xl border text-xs focus:outline-none focus:ring-1 transition-all ${
-                      isDark 
-                        ? 'bg-slate-900 border-slate-800 focus:border-cyan-500 focus:ring-cyan-500/30' 
-                        : 'bg-white border-slate-200 focus:border-blue-500 focus:ring-blue-500/20'
-                    }`}
-                  />
-                </div>
-
+                {/* Feedback alerts */}
                 {errorMsg && (
                   <div className="p-2.5 rounded-xl border border-rose-500/20 bg-rose-500/5 text-rose-500 text-[10px] flex items-center gap-2">
                     <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
@@ -1140,11 +1048,12 @@ export default function Header({
                   </div>
                 )}
 
+                {/* Footer Controls */}
                 <div className="pt-2 flex gap-2">
                   <button
                     type="button"
                     onClick={() => {
-                      setShowChangeUsernameModal(false);
+                      setShowProfileModal(false);
                       setErrorMsg('');
                       setSuccessMsg('');
                     }}
@@ -1158,146 +1067,17 @@ export default function Header({
                   </button>
                   <button
                     type="submit"
-                    disabled={loadingAction || !newUsernameInput.trim()}
+                    disabled={loadingAction}
                     className="flex-1 bg-blue-600 hover:bg-blue-500 dark:bg-cyan-600 dark:hover:bg-cyan-500 disabled:opacity-50 text-white py-2.5 rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer flex items-center justify-center gap-1.5"
                   >
                     {loadingAction ? (
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                     ) : (
-                      'Save Changes'
+                      'Save Identity'
                     )}
                   </button>
                 </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
-      {/* --- CHANGE PASSWORD MODAL --- */}
-      <AnimatePresence>
-        {showChangePasswordModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 0.5 }}
-              exit={{ opacity: 0 }}
-              onClick={() => {
-                setShowChangePasswordModal(false);
-                setErrorMsg('');
-                setSuccessMsg('');
-              }}
-              className="fixed inset-0 bg-black/60 cursor-pointer"
-            />
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className={`relative w-full max-w-sm rounded-2xl border p-6 shadow-2xl z-10 transition-colors duration-300 ${
-                isDark ? 'bg-slate-950 border-slate-850 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-5">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-1.5 bg-purple-500/10 text-purple-500 rounded-lg">
-                    <Shield className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>Change Password</h3>
-                    <p className="text-[10px] text-slate-400">Update your account password securely</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => {
-                    setShowChangePasswordModal(false);
-                    setErrorMsg('');
-                    setSuccessMsg('');
-                  }}
-                  className={`p-1 rounded-lg border transition-all cursor-pointer ${
-                    isDark 
-                      ? 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white' 
-                      : 'border-slate-200 bg-white text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <form onSubmit={handleChangePassword} className="space-y-4">
-                <div>
-                  <label className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">New Password</label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="Min 6 characters"
-                    value={newPasswordInput}
-                    onChange={(e) => setNewPasswordInput(e.target.value)}
-                    className={`w-full mt-1 px-3.5 py-2.5 rounded-xl border text-xs focus:outline-none focus:ring-1 transition-all ${
-                      isDark 
-                        ? 'bg-slate-900 border-slate-800 focus:border-cyan-500 focus:ring-cyan-500/30' 
-                        : 'bg-white border-slate-200 focus:border-blue-500 focus:ring-blue-500/20'
-                    }`}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-slate-400 text-[9px] uppercase tracking-wide font-bold">Confirm Password</label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="Re-enter new password"
-                    value={confirmPasswordInput}
-                    onChange={(e) => setConfirmPasswordInput(e.target.value)}
-                    className={`w-full mt-1 px-3.5 py-2.5 rounded-xl border text-xs focus:outline-none focus:ring-1 transition-all ${
-                      isDark 
-                        ? 'bg-slate-900 border-slate-800 focus:border-cyan-500 focus:ring-cyan-500/30' 
-                        : 'bg-white border-slate-200 focus:border-blue-500 focus:ring-blue-500/20'
-                    }`}
-                  />
-                </div>
-
-                {errorMsg && (
-                  <div className="p-2.5 rounded-xl border border-rose-500/20 bg-rose-500/5 text-rose-500 text-[10px] flex items-center gap-2">
-                    <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-                    <span>{errorMsg}</span>
-                  </div>
-                )}
-
-                {successMsg && (
-                  <div className="p-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 text-emerald-500 text-[10px] flex items-center gap-2">
-                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                    <span>{successMsg}</span>
-                  </div>
-                )}
-
-                <div className="pt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowChangePasswordModal(false);
-                      setErrorMsg('');
-                      setSuccessMsg('');
-                    }}
-                    className={`flex-1 py-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                      isDark 
-                        ? 'border-slate-800 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-850' 
-                        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={loadingAction || !newPasswordInput || !confirmPasswordInput}
-                    className="flex-1 bg-blue-600 hover:bg-blue-500 dark:bg-cyan-600 dark:hover:bg-cyan-500 disabled:opacity-50 text-white py-2.5 rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    {loadingAction ? (
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      'Save Password'
-                    )}
-                  </button>
-                </div>
               </form>
             </motion.div>
           </div>

@@ -34,6 +34,21 @@ export interface Vulnerability {
   recommendation: string;
   fixAvailable: boolean;
   fixedCode?: string;
+
+  // Hardened audit fields
+  affectedFunction?: string;
+  technicalExplanation?: string;
+  whyThisIssueOccurs?: string;
+  possibleAttackScenario?: string;
+  potentialFinancialImpact?: string;
+  exploitExample?: string;
+  codeExample?: string;
+  bestPracticeReference?: string;
+  estimatedFixDifficulty?: 'Low' | 'Medium' | 'High' | string;
+  priority?: 'Low' | 'Medium' | 'High' | string;
+  explanationOfChanges?: string;
+  whyFixWorks?: string;
+  remainingRisks?: string;
 }
 
 export interface AuditResult {
@@ -43,6 +58,19 @@ export interface AuditResult {
   complexity: number;
   vulnerabilities: Vulnerability[];
   summary: string;
+
+  // Hardened audit fields
+  openZeppelinCompatibility?: string;
+  compilerCompatibility?: string;
+  attackSurfaceSummary?: string;
+  overallRecommendations?: string;
+  securityChecklist?: string[];
+  deploymentReadiness?: string;
+  auditConfidenceScore?: number;
+  finalVerdict?: string;
+  readyForMainnet?: boolean;
+  readyForTestnet?: boolean;
+  needsReview?: boolean;
 }
 
 export interface DeploymentHistory {

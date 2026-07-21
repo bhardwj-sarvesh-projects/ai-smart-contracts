@@ -529,44 +529,78 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 
 // POST /api/audit
 app.post("/api/audit", async (req, res) => {
-  const userConfig = getActiveUserConfig(req);
-  const { files } = req.body;
+  try {
+    const userConfig = getActiveUserConfig(req);
+    const { files } = req.body;
 
-  if (!files) {
-    return res.status(400).json({ error: "Files are required for auditing" });
-  }
+    if (!files || !Array.isArray(files) || files.length === 0) {
+      return res.status(400).json({ error: "Files are required for auditing" });
+    }
 
-  const filesContext = files.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
+    const filesContext = files.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
 
-  const auditPrompt = `
-You are an expert Smart Contract Security Auditor. Analyze the following smart contracts and identify vulnerabilities, gas inefficiencies, or code quality issues.
+    const auditPrompt = `
+You are an elite Smart Contract Security Auditor and Threat Modeler. Analyze the following smart contracts and identify vulnerabilities, gas inefficiencies, or structural code quality issues.
 Workspace files:
 ${filesContext}
 
 YOU MUST output a JSON response conforming strictly to this format:
 {
-  "score": 90,
-  "codeQuality": 95,
-  "gasOptimization": 85,
-  "complexity": 3,
-  "summary": "High-level summary of the audit findings",
+  "score": 90, // Overall security score (0 to 100)
+  "codeQuality": 95, // Code quality score (0 to 100)
+  "gasOptimization": 85, // Gas efficiency score (0 to 100)
+  "complexity": 3, // Contract complexity index (1 to 10)
+  "summary": "High-level executive summary of the security audit findings, mapping reentrancy, access controls, math operations, and key threat surfaces.",
+  
+  // New production-grade audit fields
+  "openZeppelinCompatibility": "Compatible with OpenZeppelin safe-ERC20, Ownable, or ReentrancyGuard modules if applicable.",
+  "compilerCompatibility": "Tested for compilers matching ^0.8.20 (or equivalent language toolchains).",
+  "attackSurfaceSummary": "Analysis of external entry points, admin actions, and key token/value transfers.",
+  "overallRecommendations": "Actionable overall developer guidelines to secure the codebase.",
+  "securityChecklist": [
+    "Reentrancy guards verified on state-changing external functions",
+    "Integer overflow and safe-casting boundaries checked",
+    "Access modifiers validated for administrative roles",
+    "Token and native balance calculations sanity checked"
+  ],
+  "deploymentReadiness": "Description of deployment readiness e.g., 'Ready for Testnet deployment after addressing critical items.'",
+  "auditConfidenceScore": 95, // Confidence score from 0 to 100
+  "finalVerdict": "Needs Remediation / Approved",
+  "readyForMainnet": false, // boolean
+  "readyForTestnet": true, // boolean
+  "needsReview": true, // boolean
+
   "vulnerabilities": [
     {
       "id": "vuln-1",
-      "title": "Vulnerability Title",
-      "severity": "critical|high|medium|low|informational",
-      "description": "Clear description of vulnerability",
-      "file": "path/to/vulnerable/file",
+      "title": "Reentrancy vulnerability in withdraw function",
+      "severity": "critical", // Must be one of: critical | high | medium | low | informational
+      "description": "State variable updated after external transfer allowing caller to reenter prior to state finalization.",
+      "file": "path/to/file",
       "line": 15,
-      "recommendation": "Step-by-step recommendation",
-      "fixAvailable": true
+      "affectedFunction": "withdraw(uint256)",
+      "technicalExplanation": "The function performs an external transfer using message call prior to updating the user's mapped balance state, violating the Checks-Effects-Interactions pattern.",
+      "whyThisIssueOccurs": "The developer did not call the ReentrancyGuard modifier or update the balance state before triggering the transfer.",
+      "possibleAttackScenario": "An attacker uses a malicious fallback contract to call withdraw recursively, draining the contract pool.",
+      "potentialFinancialImpact": "Loss of all stored user deposits and native pool liquidity.",
+      "exploitExample": "contract Exploit { fallback() external payable { target.withdraw(1 ether); } }",
+      "recommendation": "Update user balances BEFORE triggering the external transfer, or use the nonReentrant modifier from OpenZeppelin.",
+      "codeExample": "mapping(address => uint255) balances;\nfunction withdraw(uint256 amount) external {\n  uint255 bal = balances[msg.sender];\n  require(bal >= amount);\n  balances[msg.sender] -= amount;\n  (bool success, ) = msg.sender.call{value: amount}('');\n  require(success);\n}",
+      "bestPracticeReference": "ConsenSys Smart Contract Best Practices - Checks-Effects-Interactions Pattern",
+      "estimatedFixDifficulty": "Low", // Low | Medium | High
+      "priority": "High", // Low | Medium | High
+      "fixAvailable": true,
+      "fixedCode": "Full corrected smart contract code for the affected file, with this vulnerability resolved.",
+      "explanationOfChanges": "Moved the balance decrement statement to occur before the low-level call.",
+      "whyFixWorks": "It establishes a correct Checks-Effects-Interactions pattern, so recursive re-entrant withdraw calls see zero balance and fail.",
+      "remainingRisks": "Ensure that any other custom transfer helper functions in the contract also follow this pattern."
     }
   ]
 }
+
 Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
 `;
 
-  try {
     const result = await AIService.auditWorkspace(userConfig, auditPrompt);
     return res.json({
       ...result.data,

@@ -9,6 +9,7 @@ interface FileTreeProps {
   onAddFile: (path: string) => void;
   onDeleteFile: (path: string) => void;
   onOpenDeployPanel?: () => void;
+  theme?: 'dark' | 'light';
 }
 
 export default function FileTree({
@@ -17,7 +18,8 @@ export default function FileTree({
   onSelectFile,
   onAddFile,
   onDeleteFile,
-  onOpenDeployPanel
+  onOpenDeployPanel,
+  theme = 'dark'
 }: FileTreeProps) {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
     contracts: true,
@@ -29,6 +31,8 @@ export default function FileTree({
   const [newFileName, setNewFileName] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedFolder, setSelectedFolder] = useState('contracts');
+
+  const isDark = theme === 'dark';
 
   // Group files into standard virtual folders
   const getFolderStructure = () => {
@@ -82,12 +86,18 @@ export default function FileTree({
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-900 border-r border-slate-800 text-slate-300 select-none">
-      <div className="p-3 border-b border-slate-800 flex items-center justify-between">
-        <span className="text-xs font-semibold tracking-wider text-slate-400 uppercase">Project Explorer</span>
+    <div className={`flex flex-col h-full border-r select-none transition-colors duration-300 ${
+      isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'
+    }`}>
+      <div className={`p-3 border-b flex items-center justify-between transition-colors duration-300 ${
+        isDark ? 'border-slate-800' : 'border-slate-200'
+      }`}>
+        <span className={`text-xs font-semibold tracking-wider uppercase ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Project Explorer</span>
         <button
           onClick={() => setShowAddForm(!showAddForm)}
-          className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+          className={`p-1 rounded transition-colors ${
+            isDark ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200 text-slate-600 hover:text-slate-900'
+          }`}
           title="New File"
           id="btn-add-file"
         >
@@ -96,13 +106,17 @@ export default function FileTree({
       </div>
 
       {showAddForm && (
-        <form onSubmit={handleCreateFile} className="p-3 bg-slate-950 border-b border-slate-800 space-y-2">
+        <form onSubmit={handleCreateFile} className={`p-3 border-b space-y-2 transition-colors ${
+          isDark ? 'bg-slate-950 border-slate-800' : 'bg-white border-slate-200'
+        }`}>
           <div className="flex flex-col space-y-1">
-            <label className="text-[10px] text-slate-500 uppercase">Folder Destination</label>
+            <label className="text-[10px] font-bold text-slate-500 uppercase">Folder Destination</label>
             <select
               value={selectedFolder}
               onChange={(e) => setSelectedFolder(e.target.value)}
-              className="bg-slate-900 border border-slate-800 text-xs rounded p-1 text-slate-300 focus:outline-none focus:border-cyan-500"
+              className={`text-xs rounded p-1 focus:outline-none focus:border-cyan-500 border transition-colors ${
+                isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'
+              }`}
             >
               <option value="contracts">contracts / programs</option>
               <option value="test">test</option>
@@ -111,13 +125,15 @@ export default function FileTree({
             </select>
           </div>
           <div className="flex flex-col space-y-1">
-            <label className="text-[10px] text-slate-500 uppercase">File Name (with ext)</label>
+            <label className="text-[10px] font-bold text-slate-500 uppercase">File Name (with ext)</label>
             <input
               type="text"
               placeholder="e.g. Escrow.sol"
               value={newFileName}
               onChange={(e) => setNewFileName(e.target.value)}
-              className="bg-slate-900 border border-slate-800 text-xs rounded p-1.5 text-slate-300 focus:outline-none focus:border-cyan-500"
+              className={`text-xs rounded p-1.5 focus:outline-none focus:border-cyan-500 border transition-colors ${
+                isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'
+              }`}
               autoFocus
             />
           </div>
@@ -125,13 +141,15 @@ export default function FileTree({
             <button
               type="button"
               onClick={() => setShowAddForm(false)}
-              className="px-2 py-1 text-[10px] hover:bg-slate-800 rounded"
+              className={`px-2 py-1 text-[10px] rounded transition-colors ${
+                isDark ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500'
+              }`}
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-2 py-1 text-[10px] bg-cyan-600 text-white rounded hover:bg-cyan-500 font-medium"
+              className="px-2 py-1 text-[10px] bg-cyan-600 text-white rounded hover:bg-cyan-500 font-medium cursor-pointer"
             >
               Create
             </button>
@@ -152,15 +170,17 @@ export default function FileTree({
             <div key={folderKey} className="space-y-0.5">
               <div
                 onClick={() => toggleFolder(folderKey)}
-                className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-slate-800/60 cursor-pointer text-slate-400 hover:text-slate-200 transition-colors"
+                className={`flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition-colors ${
+                  isDark ? 'hover:bg-slate-800/60 text-slate-400 hover:text-slate-200' : 'hover:bg-slate-200/50 text-slate-600 hover:text-slate-900'
+                }`}
               >
                 {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                 <Folder className="w-4 h-4 text-sky-400" />
-                <span className="truncate">{folderKey}</span>
+                <span className="truncate font-semibold">{folderKey}</span>
               </div>
 
               {isExpanded && (
-                <div className="pl-4 border-l border-slate-800/80 ml-3.5 space-y-0.5">
+                <div className={`pl-4 border-l ml-3.5 space-y-0.5 ${isDark ? 'border-slate-800/80' : 'border-slate-200'}`}>
                   {folderFiles.map((file) => {
                     const isActive = file.path === activeFilePath;
                     return (
@@ -168,8 +188,8 @@ export default function FileTree({
                         key={file.path}
                         className={`group flex items-center justify-between px-2 py-1 rounded cursor-pointer transition-colors ${
                           isActive
-                            ? 'bg-slate-800 text-white border-l-2 border-cyan-500'
-                            : 'hover:bg-slate-800/40 text-slate-400 hover:text-slate-200'
+                            ? isDark ? 'bg-slate-800 text-white border-l-2 border-cyan-500' : 'bg-cyan-100 text-cyan-900 border-l-2 border-cyan-500 font-semibold shadow-sm'
+                            : isDark ? 'hover:bg-slate-800/40 text-slate-400 hover:text-slate-200' : 'hover:bg-slate-200/30 text-slate-600 hover:text-slate-900'
                         }`}
                         onClick={() => onSelectFile(file.path)}
                       >
@@ -186,7 +206,9 @@ export default function FileTree({
                               onDeleteFile(file.path);
                             }
                           }}
-                          className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-slate-700 rounded text-slate-500 hover:text-rose-400 transition-all"
+                          className={`opacity-0 group-hover:opacity-100 p-0.5 rounded text-slate-500 hover:text-rose-400 transition-all ${
+                            isDark ? 'hover:bg-slate-700' : 'hover:bg-slate-200'
+                          }`}
                           title="Delete File"
                           id={`btn-delete-${file.path.replace(/[^a-zA-Z0-9]/g, '-')}`}
                         >
@@ -203,7 +225,7 @@ export default function FileTree({
 
         {/* Render Root Files */}
         {folders.root && folders.root.length > 0 && (
-          <div className="space-y-0.5 pt-2 border-t border-slate-800/50 mt-2">
+          <div className={`space-y-0.5 pt-2 border-t mt-2 ${isDark ? 'border-slate-800/50' : 'border-slate-200'}`}>
             {folders.root.map((file) => {
               const isActive = file.path === activeFilePath;
               return (
@@ -211,8 +233,8 @@ export default function FileTree({
                   key={file.path}
                   className={`group flex items-center justify-between px-2 py-1 rounded cursor-pointer transition-colors ${
                     isActive
-                      ? 'bg-slate-800 text-white border-l-2 border-cyan-500'
-                      : 'hover:bg-slate-800/40 text-slate-400 hover:text-slate-200'
+                      ? isDark ? 'bg-slate-800 text-white border-l-2 border-cyan-500' : 'bg-cyan-100 text-cyan-900 border-l-2 border-cyan-500 font-semibold shadow-sm'
+                      : isDark ? 'hover:bg-slate-800/40 text-slate-400 hover:text-slate-200' : 'hover:bg-slate-200/30 text-slate-600 hover:text-slate-900'
                   }`}
                   onClick={() => onSelectFile(file.path)}
                 >
@@ -229,7 +251,9 @@ export default function FileTree({
                         onDeleteFile(file.path);
                       }
                     }}
-                    className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-slate-700 rounded text-slate-500 hover:text-rose-400 transition-all"
+                    className={`opacity-0 group-hover:opacity-100 p-0.5 rounded text-slate-500 hover:text-rose-400 transition-all ${
+                      isDark ? 'hover:bg-slate-700' : 'hover:bg-slate-200'
+                    }`}
                     title="Delete File"
                     id={`btn-delete-root-${file.path.replace(/[^a-zA-Z0-9]/g, '-')}`}
                   >
@@ -238,19 +262,20 @@ export default function FileTree({
                 </div>
               );
             })}
-
-            {onOpenDeployPanel && (
-              <button
-                onClick={onOpenDeployPanel}
-                className="w-full flex items-center gap-2.5 px-3 py-2.5 mt-3.5 rounded-xl border border-blue-500/30 bg-blue-500/5 hover:bg-blue-500/10 text-blue-600 dark:border-cyan-500/30 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 dark:text-cyan-400 cursor-pointer transition-all font-bold text-left animate-pulse"
-                style={{ animationDuration: '3s' }}
-                id="btn-sidebar-deploy-panel"
-              >
-                <Zap className="w-4 h-4 text-amber-500 shrink-0" />
-                <span className="text-xs">Deploy & Pipeline</span>
-              </button>
-            )}
           </div>
+        )}
+
+        {/* Permanently Visible Deploy & Pipeline button */}
+        {onOpenDeployPanel && (
+          <button
+            onClick={onOpenDeployPanel}
+            className="w-full flex items-center gap-2.5 px-3 py-2.5 mt-4 rounded-xl cursor-pointer transition-all font-bold text-left shadow-sm border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 animate-pulse"
+            style={{ animationDuration: '3s' }}
+            id="btn-sidebar-deploy-panel"
+          >
+            <Zap className="w-4 h-4 text-amber-500 shrink-0" />
+            <span className="text-xs">Deploy & Pipeline</span>
+          </button>
         )}
       </div>
     </div>

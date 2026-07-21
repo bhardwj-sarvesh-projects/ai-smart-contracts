@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Header from './components/Header';
 import FileTree from './components/FileTree';
@@ -39,8 +39,29 @@ export default function App() {
   const [showTemplateLibrary, setShowTemplateLibrary] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [showDeployPanel, setShowDeployPanel] = useState(false);
+  const [deployPanelHeight, setDeployPanelHeight] = useState(280);
   const [theme, setTheme] = useState<'dark' | 'light'>('light');
   const [activeWorkspaceSubTab, setActiveWorkspaceSubTab] = useState<'files' | 'editor' | 'assistant'>('editor');
+
+  const handleResizerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = deployPanelHeight;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaY = moveEvent.clientY - startY;
+      const newHeight = Math.max(150, Math.min(window.innerHeight * 0.7, startHeight - deltaY));
+      setDeployPanelHeight(newHeight);
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
 
   // Plan generation state
   const [activePlan, setActivePlan] = useState<any>(null);
@@ -55,6 +76,22 @@ export default function App() {
   // Authentication & Settings States
   const { user, logout, loading } = useAuth();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+
+  // Toast notifications state
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToast({ message, type });
+  }, []);
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => {
+        setToast(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   // Active AI Provider config
   const [activeProvider, setActiveProvider] = useState('auto');
@@ -258,7 +295,7 @@ export default function App() {
     if (!activeProject) return;
 
     if (activeProject.files.some((f) => f.path === path)) {
-      alert('File already exists in workspace!');
+      showToast('File already exists in workspace!', 'error');
       return;
     }
 
@@ -570,9 +607,10 @@ export default function App() {
       setProjects((prev) => [...prev, newProj]);
       setActiveProjectId(newProj.id);
       setActiveTab('workspace');
+      showToast('Template cloned successfully!', 'success');
     } catch (err: any) {
       console.error('Failed to clone template', err);
-      alert(`Failed to clone template: ${err.message || String(err)}`);
+      showToast(`Failed to clone template: ${err.message || String(err)}`, 'error');
     } finally {
       setIsProcessing(false);
     }
@@ -824,6 +862,7 @@ export default function App() {
         onLogout={async () => {
           await logout();
         }}
+        showToast={showToast}
       />
 
       {/* Active Tab Router */}
@@ -849,12 +888,14 @@ export default function App() {
           }}
           theme={theme}
           isProcessing={isProcessing}
+          showToast={showToast}
         />
       ) : activeTab === 'admin' ? (
         <AdminDashboard
           theme={theme}
           authedFetch={authedFetch}
           onClose={() => setActiveTab('dashboard')}
+          showToast={showToast}
         />
       ) : (
         /* Workspace View (with fallback empty splash state) */
@@ -928,17 +969,18 @@ export default function App() {
                     onSelectFile={handleSelectFile}
                     onAddFile={handleAddFile}
                     onDeleteFile={handleDeleteFile}
-                    onOpenDeployPanel={() => setShowDeployPanel(true)}
+                    onOpenDeployPanel={() => setShowDeployPanel(!showDeployPanel)}
+                    theme={theme}
                   />
                 )}
               </div>
 
               {/* Central Workspace (Editor + Pipeline Assembly Controller) */}
-              <div className={`flex-1 flex-col min-w-0 ${
+              <div className={`flex-1 flex flex-col min-w-0 ${
                 activeWorkspaceSubTab === 'editor' ? 'flex' : 'hidden lg:flex'
               }`}>
                 {/* Upper Editor Workspace */}
-                <div className="flex-1 min-h-0 flex flex-col">
+                <div className="flex-1 min-h-0 flex flex-col" style={{ height: (showDeployPanel && activeProject) ? `calc(100% - ${deployPanelHeight}px)` : '100%' }}>
                   <CodeWorkspace
                     files={activeProject.files}
                     activeFilePath={activeProject.activeFilePath}
@@ -946,6 +988,66 @@ export default function App() {
                     onSelectFile={handleSelectFile}
                   />
                 </div>
+
+                {showDeployPanel && activeProject && (
+                  <>
+                    {/* Resizer bar */}
+                    <div
+                      onMouseDown={handleResizerMouseDown}
+                      className={`h-1.5 w-full cursor-row-resize hover:bg-cyan-500 active:bg-cyan-500 transition-colors flex-shrink-0 border-t border-b ${
+                        theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-slate-200 border-slate-300'
+                      }`}
+                      title="Drag to resize deploy panel"
+                    />
+                    {/* Bottom Deploy Panel */}
+                    <div
+                      className={`flex-shrink-0 overflow-hidden relative flex flex-col transition-colors duration-300 ${
+                        theme === 'dark' ? 'bg-slate-950 border-slate-850 text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-800'
+                      }`}
+                      style={{ height: `${deployPanelHeight}px` }}
+                    >
+                      {/* Header inside the bottom panel */}
+                      <div className={`p-2 px-4 border-b flex items-center justify-between transition-colors ${
+                        theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+                      }`}>
+                        <div className="flex items-center gap-2">
+                          <Zap className="w-4 h-4 text-cyan-500 animate-pulse" />
+                          <span className={`text-xs font-bold ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>Pipeline Assembly & Ingress</span>
+                          <span className="text-[9px] text-slate-400 font-mono">(Resizable Bottom Panel)</span>
+                        </div>
+                        <button
+                          onClick={() => setShowDeployPanel(false)}
+                          className={`p-1 rounded transition-colors cursor-pointer ${
+                            theme === 'dark' 
+                              ? 'text-slate-400 hover:text-white hover:bg-slate-800' 
+                              : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200'
+                          }`}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div className="flex-1 overflow-hidden">
+                        <PipelineDashboard
+                          project={activeProject}
+                          onUpdateFiles={(newFiles) => {
+                            const updated = { ...activeProject, files: newFiles };
+                            setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
+                            authedFetch(`/api/projects/${activeProject.id}`, {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(updated)
+                            });
+                          }}
+                          onCompile={handleCompile}
+                          onDeploy={handleDeploy}
+                          isCompiling={isCompiling}
+                          isDeploying={isDeploying}
+                          theme={theme}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Right Assistant (Copilot refactoring + Security Auditor panel) */}
@@ -1071,72 +1173,44 @@ export default function App() {
         />
       )}
 
-      {/* Slide-in Deploy & Compile Drawer */}
+      {/* Toast Notifications Overlay */}
       <AnimatePresence>
-        {showDeployPanel && activeProject && (
-          <>
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 0.5 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowDeployPanel(false)}
-              className="fixed inset-0 bg-black/60 z-[90] cursor-pointer"
-            />
-            {/* Drawer container */}
-            <motion.div
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 26, stiffness: 190 }}
-              className={`fixed top-0 right-0 h-full w-full sm:w-[640px] shadow-2xl z-[100] flex flex-col border-l transition-colors duration-300 ${
-                theme === 'dark' ? 'bg-slate-950 border-slate-800 text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-800'
-              }`}
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 30, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.9, transition: { duration: 0.15 } }}
+            className={`fixed bottom-5 right-5 z-[200] max-w-sm p-4 rounded-xl shadow-2xl border flex items-center gap-3 transition-colors duration-250 ${
+              theme === 'dark' 
+                ? 'bg-slate-900/95 border-slate-800 text-slate-100 shadow-black/80' 
+                : 'bg-white/95 border-slate-200 text-slate-800 shadow-slate-200/80'
+            }`}
+          >
+            {toast.type === 'success' && (
+              <div className="p-1.5 bg-emerald-500/10 text-emerald-500 rounded-lg shrink-0">
+                <Layers className="w-4 h-4" />
+              </div>
+            )}
+            {toast.type === 'error' && (
+              <div className="p-1.5 bg-rose-500/10 text-rose-500 rounded-lg shrink-0">
+                <AlertCircle className="w-4 h-4" />
+              </div>
+            )}
+            {toast.type === 'info' && (
+              <div className="p-1.5 bg-blue-500/10 text-blue-500 rounded-lg shrink-0">
+                <Sparkles className="w-4 h-4" />
+              </div>
+            )}
+            <div className="flex-1 text-xs font-semibold leading-normal text-slate-700 dark:text-slate-300">
+              {toast.message}
+            </div>
+            <button
+              onClick={() => setToast(null)}
+              className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 cursor-pointer"
             >
-              <div className={`p-4 border-b flex items-center justify-between transition-colors ${
-                theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
-              }`}>
-                <div className="flex items-center gap-2.5">
-                  <div className="p-1.5 bg-cyan-600/10 rounded-lg text-cyan-500">
-                    <Zap className="w-5 h-5 animate-pulse" />
-                  </div>
-                  <div>
-                    <h3 className={`text-sm font-bold ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>Pipeline Assembly & Ingress</h3>
-                    <p className="text-[10px] text-slate-400">Configure sandbox compiler environments and deploy smart contracts</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowDeployPanel(false)}
-                  className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                    theme === 'dark' 
-                      ? 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800' 
-                      : 'border-slate-200 bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50'
-                  }`}
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="flex-1 overflow-hidden">
-                <PipelineDashboard
-                  project={activeProject}
-                  onUpdateFiles={(newFiles) => {
-                    const updated = { ...activeProject, files: newFiles };
-                    setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
-                    authedFetch(`/api/projects/${activeProject.id}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(updated)
-                    });
-                  }}
-                  onCompile={handleCompile}
-                  onDeploy={handleDeploy}
-                  isCompiling={isCompiling}
-                  isDeploying={isDeploying}
-                  theme={theme}
-                />
-              </div>
-            </motion.div>
-          </>
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

@@ -5,24 +5,24 @@
  */
 
 export const AI_CONFIG = {
-  provider: "openai",
+  provider: process.env.GEMINI_API_KEY ? "gemini" : "openai",
 
   timeout: 60000,
 
   openai: {
-    apiKey: "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",
-    model: "gpt-5-mini",
+    apiKey: process.env.OPENAI_API_KEY || "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",
+    model: "gpt-4o-mini",
   },
 
   groq: {
-    apiKey: "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",
+    apiKey: process.env.GROQ_API_KEY || "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",
     model: "llama-3.3-70b-versatile",
     baseURL: "https://api.groq.com/openai/v1",
   },
 
   gemini: {
-    apiKey: "",
-    model: "",
+    apiKey: process.env.GEMINI_API_KEY || "",
+    model: "gemini-3.5-flash",
   },
 };
 
