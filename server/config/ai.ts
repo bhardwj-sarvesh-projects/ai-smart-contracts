@@ -4,18 +4,20 @@
  * The frontend must never import it.
  */
 
+import { isDummyOrEmptyKey } from "../providers/ProviderFactory";
+
 export const AI_CONFIG = {
-  provider: process.env.GEMINI_API_KEY ? "gemini" : "openai",
+  provider: process.env.AI_PROVIDER || (process.env.GEMINI_API_KEY && !isDummyOrEmptyKey(process.env.GEMINI_API_KEY, "gemini") ? "gemini" : "openai"),
 
   timeout: 60000,
 
   openai: {
-    apiKey: process.env.OPENAI_API_KEY || "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",
+    apiKey: process.env.OPENAI_API_KEY || "",
     model: "gpt-4o-mini",
   },
 
   groq: {
-    apiKey: process.env.GROQ_API_KEY || "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",
+    apiKey: process.env.GROQ_API_KEY || "",
     model: "llama-3.3-70b-versatile",
     baseURL: "https://api.groq.com/openai/v1",
   },

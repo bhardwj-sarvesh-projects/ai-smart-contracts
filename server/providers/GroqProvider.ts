@@ -31,25 +31,49 @@ export class GroqProvider implements AIProvider {
     const startTime = Date.now();
     let lastError: any = null;
 
+    let sys = systemInstruction || "";
+    if (responseMimeType === "application/json" && !sys.toLowerCase().includes("json") && !prompt.toLowerCase().includes("json")) {
+      sys = sys ? `${sys}\nYou MUST respond with valid JSON.` : "You MUST respond with valid JSON.";
+    }
+
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         console.log("--------------------------------");
         console.log("GROQ REQUEST");
         console.log(`Model: ${this.model}`);
         console.log(`Route: ${route}`);
-        console.log(`Prompt Length: ${prompt.length + (systemInstruction ? systemInstruction.length : 0)}`);
+        console.log(`Prompt Length: ${prompt.length + sys.length}`);
         console.log("--------------------------------");
 
-        const response = await this.client.chat.completions.create({
-          model: this.model,
-          messages: [
-            ...(systemInstruction ? [{ role: "system" as const, content: systemInstruction }] : []),
-            { role: "user" as const, content: prompt }
-          ],
-          response_format: responseMimeType === "application/json" ? { type: "json_object" } : undefined,
-          temperature: this.temperature,
-          max_tokens: this.maxTokens,
-        });
+        let response;
+        try {
+          response = await this.client.chat.completions.create({
+            model: this.model,
+            messages: [
+              ...(sys ? [{ role: "system" as const, content: sys }] : []),
+              { role: "user" as const, content: prompt }
+            ],
+            response_format: responseMimeType === "application/json" ? { type: "json_object" } : undefined,
+            temperature: this.temperature,
+            max_tokens: this.maxTokens,
+          });
+        } catch (rfErr: any) {
+          // Fallback if response_format is rejected by specific model/endpoint
+          if (responseMimeType === "application/json" && (rfErr.status === 400 || (rfErr.message && rfErr.message.toLowerCase().includes("response_format")))) {
+            console.warn(`[GROQ PROVIDER] Model rejected response_format json_object. Retrying without response_format constraint...`);
+            response = await this.client.chat.completions.create({
+              model: this.model,
+              messages: [
+                ...(sys ? [{ role: "system" as const, content: sys }] : []),
+                { role: "user" as const, content: prompt }
+              ],
+              temperature: this.temperature,
+              max_tokens: this.maxTokens,
+            });
+          } else {
+            throw rfErr;
+          }
+        }
 
         const text = response.choices[0]?.message?.content || "";
         const durationMs = Date.now() - startTime;
@@ -85,6 +109,22 @@ export class GroqProvider implements AIProvider {
         console.error("--------------------------------");
 
         console.warn(`[GROQ PROVIDER] Attempt ${attempt} failed:`, err.message || err);
+
+        const isAuthErr = err.status === 401 || err.status === 403 ||
+          (err.message && (
+            err.message.includes("401") ||
+            err.message.includes("403") ||
+            err.message.toLowerCase().includes("invalid_api_key") ||
+            err.message.toLowerCase().includes("incorrect api key") ||
+            err.message.toLowerCase().includes("unauthorized")
+          ));
+
+        if (isAuthErr) {
+          console.warn(`[GROQ PROVIDER] Authentication error detected (401/403). Fast-failing attempt ${attempt} without retries.`);
+          err.isAuthError = true;
+          throw err;
+        }
+
         if (attempt < retries) {
           const delay = baseDelayMs * Math.pow(2, attempt - 1);
           await new Promise((resolve) => setTimeout(resolve, delay));

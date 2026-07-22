@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { AIService } from "./server/services/AIService";
 import { OPENAI_MODEL, AI_CONFIG } from "./server/config/ai";
 import { SettingsService, UserConfig } from "./server/services/SettingsService";
+import { isDummyOrEmptyKey } from "./server/providers/ProviderFactory";
 import settingsRouter from "./server/routes/settings";
 
 dotenv.config();
@@ -25,7 +26,7 @@ function getActiveUserConfig(req: express.Request): UserConfig {
   let userConfig = userId ? SettingsService.getDecrypted(userId) : null;
 
   if (!userConfig) {
-    const activeProvider = AI_CONFIG.provider || "openai";
+    let activeProvider = AI_CONFIG.provider || "gemini";
     let activeKey = "";
     let activeModel = "";
 
@@ -40,6 +41,15 @@ function getActiveUserConfig(req: express.Request): UserConfig {
       activeModel = AI_CONFIG.gemini.model || "gemini-3.5-flash";
     }
 
+    // Check if activeProvider key is missing or dummy, and fallback to Gemini if available
+    if (isDummyOrEmptyKey(activeKey, activeProvider)) {
+      if (process.env.GEMINI_API_KEY && !isDummyOrEmptyKey(process.env.GEMINI_API_KEY, "gemini")) {
+        activeProvider = "gemini";
+        activeKey = process.env.GEMINI_API_KEY;
+        activeModel = "gemini-3.5-flash";
+      }
+    }
+
     userConfig = {
       userId: userId || "default",
       email: email || "default@smartcontract.ai",
@@ -47,7 +57,7 @@ function getActiveUserConfig(req: express.Request): UserConfig {
       photo: photo || "",
       provider: activeProvider,
       apiKey: activeKey,
-      defaultModel: activeModel,
+      defaultModel: activeModel || "gemini-3.5-flash",
       temperature: 0.2,
       maxTokens: 2000,
       createdDate: new Date().toISOString(),
@@ -305,18 +315,36 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
 app.post("/api/generate", async (req, res) => {
   try {
     const userConfig = getActiveUserConfig(req);
-    const { prompt, blockchain, language, framework, contractType, plan } = req.body;
+    const { prompt, blockchain, language, framework, contractType, plan, systemInstruction } = req.body;
 
     if (!prompt) {
       return res.status(400).json({ error: "Prompt is required" });
+    }
+
+    // Intercept pipeline execution if systemInstruction is present
+    if (systemInstruction) {
+      console.log("[SERVER /api/generate] Serving pipeline request with custom systemInstruction.");
+      const result = await AIService.generateWorkspace(userConfig, prompt, systemInstruction);
+      return res.json(result);
     }
 
     console.log(`[AI WORKSPACE ENGINE] STAGE 6-10: Generating workspace files on blockchain: ${blockchain}`);
 
     // Create full specifications prompt with plan incorporated if present
     let extendedPrompt = `
-You are a Principal Smart Contract Architect and Lead Security Auditor.
-Create a production-ready, enterprise-grade smart contract workspace based on this request:
+You are a Principal Smart Contract Architect with 15+ years of blockchain engineering experience across protocols like OpenZeppelin, Uniswap, Aave, MakerDAO, Compound, Chainlink, and LayerZero.
+
+Your directive is to produce enterprise-grade, mainnet production-ready smart contracts that are secure, modular, scalable, readable, gas-optimized, and fully documented.
+
+CORE ENGINEERING MANDATES:
+1. No Tutorial/Demo/MVP Code: Generate complete, robust production-ready code with full implementations (never stubs, TODOs, or placeholder comments).
+2. Clean Modular Architecture: Organize code logically (License -> NatSpec -> Imports -> Interfaces -> Libraries -> Custom Errors -> Enums -> Structs -> Storage -> Events -> Modifiers -> Constructor -> External -> Public -> Internal -> Private -> View/Pure -> Receive/Fallback). Use custom errors instead of string reverts.
+3. Security & OpenZeppelin Best Practices: Incorporate ReentrancyGuard, AccessControl/Ownable, Pausable, SafeERC20, ECDSA, Permit (EIP-2612), or CEI (Checks-Effects-Interactions) as relevant. Implement zero-address checks and strict parameter validation.
+4. Gas Optimization: Use immutable/constant variables, optimal storage packing, calldata for read-only array parameters, minimal SLOAD/SSTORE operations, and unchecked arithmetic blocks where proven safe.
+5. Complete Documentation: Every public/external function must include complete NatSpec tags (@notice, @param, @return, @dev).
+6. Enterprise Testing & Config: Provide comprehensive unit tests (covering happy path, role checks, custom errors, and edge cases), deploy scripts, and a professional README.
+
+Request Details:
 "${prompt}"
 
 Blockchain Target: ${blockchain}

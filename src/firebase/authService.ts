@@ -98,7 +98,7 @@ export const AuthService = {
       let profileData: UserProfile;
       
       try {
-        const userDocSnap = await getDoc(userDocRef);
+        const userDocSnap = await withTimeout(getDoc(userDocRef), 3000, 'Firestore read timed out');
         if (!userDocSnap.exists()) {
           // Create user document if it doesn't exist
           const newUserProfile: UserProfile = {
@@ -113,11 +113,10 @@ export const AuthService = {
             preferences: {},
             aiSettings: {}
           };
-          try {
-            await setDoc(userDocRef, newUserProfile);
-          } catch (writeErr) {
+          // Fire-and-forget setDoc in background to avoid blocking login
+          setDoc(userDocRef, newUserProfile).catch(writeErr => {
             console.warn('[FIRESTORE_FALLBACK] Failed to write profile to cloud, using local cache:', writeErr);
-          }
+          });
           profileData = newUserProfile;
         } else {
           profileData = userDocSnap.data() as UserProfile;
@@ -163,14 +162,12 @@ export const AuthService = {
         throw new Error('auth/user-disabled');
       }
       
-      // Update lastLogin timestamp safely
-      try {
-        await updateDoc(userDocRef, {
-          lastLogin: new Date().toISOString()
-        });
-      } catch (updateErr) {
+      // Update lastLogin timestamp asynchronously in the background (NON-BLOCKING)
+      updateDoc(userDocRef, {
+        lastLogin: new Date().toISOString()
+      }).catch(updateErr => {
         console.warn('[FIRESTORE_FALLBACK] Failed to update lastLogin in Firestore:', updateErr);
-      }
+      });
       
       // Cache profile locally
       localStorage.setItem(`user_profile_${firebaseUser.uid}`, JSON.stringify(profileData));
@@ -312,7 +309,7 @@ export const AuthService = {
     }
     try {
       const userDocRef = doc(db, 'users', uid);
-      const userDocSnap = await getDoc(userDocRef);
+      const userDocSnap = await withTimeout(getDoc(userDocRef), 3000, 'Firestore read timed out');
       if (userDocSnap.exists()) {
         const data = userDocSnap.data() as UserProfile;
         // Update local cache

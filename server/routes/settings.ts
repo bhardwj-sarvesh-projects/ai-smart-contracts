@@ -47,9 +47,9 @@ router.get("/", authMiddleware, (req: AuthenticatedRequest, res) => {
       email: req.user!.email,
       displayName: req.user!.displayName || "",
       photo: req.user!.photoURL || "",
-      provider: "openai",
+      provider: "gemini",
       apiKey: "",
-      defaultModel: "gpt-4o-mini",
+      defaultModel: "gemini-3.5-flash",
       temperature: 0.2,
       maxTokens: 2000,
     });
@@ -94,16 +94,32 @@ router.post("/models", authMiddleware, async (req: AuthenticatedRequest, res) =>
 
     if (!resolvedKey || resolvedKey === "••••••••" || resolvedKey.includes("••")) {
       const savedUser = SettingsService.getDecrypted(req.user!.uid);
-      resolvedKey = savedUser ? savedUser.apiKey : "";
+      if (savedUser && savedUser.provider === provider) {
+        resolvedKey = savedUser.apiKey;
+      } else {
+        resolvedKey = "";
+      }
     }
 
     if (!resolvedKey) {
-      // Return beautiful default fallback models list if API key is not provided yet
+      // Return default fallback models list if API key is not provided yet for this provider
       const fallbackList = getFallbackModels(provider);
       return res.json({
         success: true,
         source: "local-fallback",
         models: fallbackList
+      });
+    }
+
+    // Check key format compatibility before making outbound API calls
+    const isGroqKey = resolvedKey.startsWith("gsk_");
+    const isOpenAIKey = resolvedKey.startsWith("sk-");
+
+    if ((provider === "openai" && isGroqKey) || (provider === "groq" && isOpenAIKey)) {
+      return res.json({
+        success: true,
+        source: "local-fallback",
+        models: getFallbackModels(provider)
       });
     }
 
@@ -191,7 +207,11 @@ router.post("/test", authMiddleware, async (req: AuthenticatedRequest, res) => {
 
     if (!apiKey || apiKey === "••••••••" || apiKey.includes("••")) {
       const savedUser = SettingsService.getDecrypted(req.user!.uid);
-      apiKey = savedUser ? savedUser.apiKey : "";
+      if (savedUser && savedUser.provider === testSettings.provider) {
+        apiKey = savedUser.apiKey;
+      } else {
+        apiKey = "";
+      }
     }
 
     if (!apiKey) {

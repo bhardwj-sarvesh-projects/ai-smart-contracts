@@ -19,7 +19,18 @@ export default function AuthView({ onLoginSuccess }: AuthViewProps) {
     setIsAuthenticating(true);
     setError(null);
     try {
+      performance.clearMarks();
+      performance.clearMeasures();
+      performance.mark('login_click');
+      console.log('[PERF] 1. Login button clicked');
+
       const loggedInUser = await login(email, password);
+
+      performance.mark('firebase_auth_complete');
+      performance.measure('Login Click -> Firebase Auth', 'login_click', 'firebase_auth_complete');
+      const m = performance.getEntriesByName('Login Click -> Firebase Auth').pop();
+      if (m) console.log(`[PERF] 2. Firebase Auth Complete: ${m.duration.toFixed(2)}ms`);
+
       onLoginSuccess(loggedInUser);
     } catch (err: any) {
       setError(err.message || 'Authentication failed. Please check your credentials.');

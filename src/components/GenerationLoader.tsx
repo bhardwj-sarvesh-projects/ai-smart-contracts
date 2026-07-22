@@ -4,16 +4,10 @@ import {
   Sparkles, 
   CheckCircle2, 
   Loader2, 
-  AlertTriangle, 
-  XCircle, 
-  Cpu, 
-  Database, 
   ShieldAlert, 
   Terminal, 
-  X,
-  FileCode,
-  Layers,
-  ArrowRight
+  Cpu, 
+  Layers
 } from 'lucide-react';
 
 interface GenerationLoaderProps {
@@ -27,14 +21,16 @@ interface GenerationLoaderProps {
   contractType?: string;
 }
 
-const PLANNING_STEPS = [
-  { id: 'analyze', text: 'Analyzing Requirements...', detail: 'Deconstructing user specifications, tokenomics, and compliance rules.' },
-  { id: 'select-chain', text: 'Selecting Blockchain...', detail: 'Detecting network protocol constraints, blocktimes, and state costs.' },
-  { id: 'select-lang', text: 'Selecting Language...', detail: 'Matching compiler constraints, gas profiles, and framework standards.' },
-  { id: 'design-arch', text: 'Designing Architecture...', detail: 'Structuring inheritance trees, standard interfaces, and storage pack layouts.' },
-  { id: 'plan-modules', text: 'Planning Contract Modules...', detail: 'Configuring events telemetry, error maps, and modifiers.' },
-  { id: 'security', text: 'Applying Security Best Practices...', detail: 'Injecting reentrancy locks, ownership recovery, and signature bounds.' },
-  { id: 'prepare', text: 'Preparing AI Generation...', detail: 'Assembling optimal prompt payloads for safe compiler alignment.' }
+const QUALITY_GATE_STEPS = [
+  { id: 'req', text: 'Analyzing Requirements...', detail: 'Deconstructing specifications, actors, business rules, and security policies.' },
+  { id: 'arch', text: 'Designing Architecture...', detail: 'Structuring inheritance hierarchy, interface definitions, and storage packing.' },
+  { id: 'sec', text: 'Planning Security...', detail: 'Configuring reentrancy locks, AccessControl roles, pausable state, and timelocks.' },
+  { id: 'gen', text: 'Generating Enterprise Code...', detail: 'Assembling production-ready smart contract, test suite, and deployment scripts.' },
+  { id: 'review', text: 'Reviewing Engineering Quality...', detail: 'Executing Quality Gate Engine static review across 10 security & quality dimensions.' },
+  { id: 'opt', text: 'Optimizing Project...', detail: 'Applying custom errors, NatSpec documentation tags, and gas optimizations.' },
+  { id: 'val', text: 'Validating Deployment...', detail: 'Verifying compiler compatibility, import resolution, and test suite setup.' },
+  { id: 'prep', text: 'Preparing Workspace...', detail: 'Finalizing files, compiling bytecode, and initializing engineering dashboard.' },
+  { id: 'ready', text: 'Project Ready.', detail: 'Quality Gate Approved (Score >= 95). Workspace loaded successfully.' }
 ];
 
 const WORKSPACE_STEPS = [
@@ -54,7 +50,7 @@ export default function GenerationLoader({
   language = 'Solidity',
   contractType = 'Custom Contract'
 }: GenerationLoaderProps) {
-  const steps = type === 'planning' ? PLANNING_STEPS : WORKSPACE_STEPS;
+  const steps = type === 'planning' ? QUALITY_GATE_STEPS : WORKSPACE_STEPS;
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
 
   // Animate steps naturally over time
@@ -62,7 +58,7 @@ export default function GenerationLoader({
     if (!isOpen || error) return;
 
     setCurrentStepIndex(0);
-    const intervalTime = type === 'planning' ? 1200 : 1500;
+    const intervalTime = type === 'planning' ? 1000 : 1200;
 
     const timer = setInterval(() => {
       setCurrentStepIndex((prev) => {
@@ -133,11 +129,6 @@ export default function GenerationLoader({
                     [FATAL_EXCEPTION_ENG_RUN] code 400
                   </p>
                   <p>{typeof error === 'string' ? error : error.message || String(error)}</p>
-                  {typeof error === 'object' && (error as any).stack && (
-                    <p className="text-slate-500 text-[9px] mt-2 border-t border-slate-900/50 pt-2">
-                      {(error as any).stack}
-                    </p>
-                  )}
                 </div>
               </div>
 
@@ -175,23 +166,22 @@ export default function GenerationLoader({
                 </div>
                 <div>
                   <span className="text-[9px] font-mono font-bold text-cyan-400 uppercase tracking-widest bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded-full">
-                    {type === 'planning' ? 'Stage 1/2: Architect Planning' : 'Stage 2/2: Building Environment'}
+                    {type === 'planning' ? 'Enterprise Quality Gate Pipeline' : 'Building Workspace'}
                   </span>
                   <h3 className="text-base font-extrabold text-white mt-1 leading-snug">
-                    {type === 'planning' ? 'Drafting Technical Blueprint' : 'Generating Secure Workspace'}
+                    {type === 'planning' ? 'Executing Quality Gate Review' : 'Generating Secure Workspace'}
                   </h3>
                   <p className="text-[10px] text-slate-500 mt-0.5 font-mono">
-                    Targeting: {blockchain} ({language}) • {contractType}
+                    Target: {blockchain} ({language}) • {contractType}
                   </p>
                 </div>
               </div>
 
               {/* Steps Progress Checklist */}
-              <div className="space-y-3.5">
+              <div className="space-y-3">
                 {steps.map((step, index) => {
                   const isCompleted = index < currentStepIndex;
                   const isActive = index === currentStepIndex;
-                  const isPending = index > currentStepIndex;
 
                   return (
                     <div 
@@ -230,12 +220,12 @@ export default function GenerationLoader({
                 })}
               </div>
 
-              {/* Bottom Subtle Pipeline Info */}
+              {/* Bottom Pipeline Status Bar */}
               <div className="bg-slate-950/40 border border-slate-850/60 rounded-xl p-3 flex items-center justify-between font-mono text-[9px] text-slate-500">
-                <span>Status: Processing AI Assembly</span>
-                <span className="flex items-center gap-1">
-                  <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-ping" />
-                  Live Stream
+                <span>Quality Gate Engine: Score Target &gt;= 95</span>
+                <span className="flex items-center gap-1 text-cyan-400 font-bold">
+                  <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-ping" />
+                  Self-Evaluating
                 </span>
               </div>
             </div>

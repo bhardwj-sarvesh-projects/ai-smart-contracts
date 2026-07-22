@@ -7,7 +7,20 @@
     <link rel="icon" type="image/jpeg" href="/src/assets/logo.jpg" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <style>
+        body { margin: 0; background-color: #020617; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; }
+        .app-init-loader { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 1rem; }
+        .app-init-logo { width: 56px; height: 56px; border-radius: 14px; box-shadow: 0 0 25px rgba(59, 130, 246, 0.4); }
+        .app-init-spinner { width: 24px; height: 24px; border: 2.5px solid rgba(255,255,255,0.1); border-top-color: #3b82f6; border-radius: 50%; animation: initSpin 0.7s linear infinite; }
+        @keyframes initSpin { to { transform: rotate(360deg); } }
+      </style>
+      <div class="app-init-loader">
+        <img src="/src/assets/logo.jpg" alt="AI Contracts" class="app-init-logo" onerror="this.style.display='none'" />
+        <div style="font-weight: 600; font-size: 1.125rem; letter-spacing: -0.01em;">AI Contracts</div>
+        <div class="app-init-spinner"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

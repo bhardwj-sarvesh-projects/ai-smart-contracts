@@ -30,7 +30,7 @@ const MODELS: Record<string, string[]> = {
   llama: ['llama-3-70b-instruct', 'llama-3-405b']
 };
 
-export default function RightAssistant({
+function RightAssistant({
   auditResult,
   files,
   onApplyAIFix,
@@ -48,6 +48,8 @@ export default function RightAssistant({
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editInstruction.trim() || isProcessing) return;
+    const start = performance.now();
+    console.log(`[PERF] 🤖 AI Generation Started using ${activeProvider}/${activeModel} at ${start.toFixed(2)}ms`);
     onEditContract(editInstruction.trim());
     setEditInstruction('');
   };
@@ -317,3 +319,5 @@ export default function RightAssistant({
     </div>
   );
 }
+
+export default React.memo(RightAssistant);

@@ -26,7 +26,7 @@ const NETWORKS: Record<string, string[]> = {
   ton: ['TON Mainnet', 'TON Testnet']
 };
 
-export default function TerminalPanel({
+function TerminalPanel({
   project,
   onCompile,
   onDeploy,
@@ -356,3 +356,5 @@ export default function TerminalPanel({
     </div>
   );
 }
+
+export default React.memo(TerminalPanel);

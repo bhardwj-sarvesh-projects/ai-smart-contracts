@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import { ProjectFile } from '../types';
-import { Settings, ZoomIn, ZoomOut, Eye, Sun, Moon, Sparkles } from 'lucide-react';
+import { ZoomIn, ZoomOut, Eye, Sun, Moon, Sparkles, Code2 } from 'lucide-react';
 
 interface CodeWorkspaceProps {
   files: ProjectFile[];
@@ -10,90 +10,115 @@ interface CodeWorkspaceProps {
   onSelectFile: (path: string) => void;
 }
 
-export default function CodeWorkspace({
+function CodeWorkspaceComponent({
   files,
   activeFilePath,
   onFileContentChange,
   onSelectFile
 }: CodeWorkspaceProps) {
-  const [editorTheme, setEditorTheme] = React.useState<'vs-dark' | 'light'>('vs-dark');
-  const [fontSize, setFontSize] = React.useState(13);
-  const [showMinimap, setShowMinimap] = React.useState(true);
+  const [editorTheme, setEditorTheme] = useState<'vs-dark' | 'light'>('vs-dark');
+  const [fontSize, setFontSize] = useState(13);
+  const [showMinimap, setShowMinimap] = useState(true);
 
-  const activeFile = files.find(f => f.path === activeFilePath) || files[0];
+  const editorRef = useRef<any>(null);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingChangeRef = useRef<{ path: string; value: string } | null>(null);
+  const prevFilePathRef = useRef<string>(activeFilePath);
+  const mountTimeRef = useRef<number>(performance.now());
 
-  const getNormalizedContent = (fileContent: any): string => {
-    // 1. Find every component that renders: generatedContract, aiResponse, response, contract, result
-    const generatedContract = fileContent;
-    const aiResponse = fileContent;
-    const response = fileContent;
-    const contract = fileContent;
-    const result = fileContent;
+  const activeFile = useMemo(() => {
+    return files.find(f => f.path === activeFilePath) || files[0];
+  }, [files, activeFilePath]);
 
-    // 2. Before rendering, log the object
-    console.log("Generated Contract:", generatedContract);
-
-    // 3. Determine the exact runtime type
-    const runtimeType = typeof generatedContract;
-    console.log("Runtime type of generatedContract:", runtimeType);
-
-    // 4. If it is an object, log keys
-    if (runtimeType === 'object' && generatedContract !== null) {
-      console.log("Object.keys(generatedContract):", Object.keys(generatedContract));
-
-      // 5. Identify which property contains the actual smart contract source code.
-      // Do NOT guess. Inspect the runtime object.
-      const obj = generatedContract as any;
-      let actualCode = '';
-      if (typeof obj.code === 'string') {
-        actualCode = obj.code;
-      } else if (typeof obj.src === 'string') {
-        actualCode = obj.src;
-      } else if (typeof obj.content === 'string') {
-        actualCode = obj.content;
-      } else if (typeof obj.contract === 'string') {
-        actualCode = obj.contract;
-      } else if (typeof obj.generatedContract === 'string') {
-        actualCode = obj.generatedContract;
-      } else if (typeof obj.migrations === 'string') {
-        actualCode = obj.migrations;
-      } else {
-        actualCode = JSON.stringify(generatedContract, null, 2);
-      }
-
-      // 7. If multiple response formats exist, normalize them into: { code: string }
-      const normalized = { code: actualCode };
-
-      // 8. Preserve original object for debugging, but only render the string contract
-      console.log("Original object preserved:", generatedContract);
-      return normalized.code;
+  const getNormalizedContent = useCallback((fileContent: any): string => {
+    if (typeof fileContent === 'string') return fileContent;
+    if (fileContent && typeof fileContent === 'object') {
+      const obj = fileContent as any;
+      if (typeof obj.code === 'string') return obj.code;
+      if (typeof obj.src === 'string') return obj.src;
+      if (typeof obj.content === 'string') return obj.content;
+      if (typeof obj.contract === 'string') return obj.contract;
+      return JSON.stringify(fileContent, null, 2);
     }
+    return '';
+  }, []);
 
-    return typeof fileContent === 'string' ? fileContent : JSON.stringify(fileContent || '');
-  };
-
-  React.useEffect(() => {
-    if (activeFile) {
-      console.log(`[CONTRACT GENERATION STEP] Contract rendered: file ${activeFile.path}`);
+  // Flush any pending debounced file saves immediately
+  const flushPendingChanges = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
     }
-  }, [activeFile]);
+    if (pendingChangeRef.current) {
+      onFileContentChange(pendingChangeRef.current.path, pendingChangeRef.current.value);
+      pendingChangeRef.current = null;
+    }
+  }, [onFileContentChange]);
 
-  const getMonacoLanguage = (path: string) => {
+  // Track file switching performance (<100ms target)
+  useEffect(() => {
+    if (prevFilePathRef.current !== activeFilePath) {
+      flushPendingChanges();
+      const start = performance.now();
+      prevFilePathRef.current = activeFilePath;
+      
+      // Request animation frame to measure switch frame render time
+      requestAnimationFrame(() => {
+        const duration = performance.now() - start;
+        console.log(`[PERF] ⏱️ File Switch (${activeFilePath}): ${duration.toFixed(2)}ms`);
+      });
+    }
+  }, [activeFilePath, flushPendingChanges]);
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      flushPendingChanges();
+    };
+  }, [flushPendingChanges]);
+
+  const getMonacoLanguage = useCallback((path: string) => {
+    if (!path) return 'plaintext';
     if (path.endsWith('.sol')) return 'solidity';
     if (path.endsWith('.rs')) return 'rust';
-    if (path.endsWith('.move')) return 'rust'; // Move shares rust tokenizer syntax highlighting well
+    if (path.endsWith('.move')) return 'rust';
     if (path.endsWith('.js') || path.endsWith('.test.js')) return 'javascript';
     if (path.endsWith('.ts')) return 'typescript';
     if (path.endsWith('.json')) return 'json';
     if (path.endsWith('.md')) return 'markdown';
     return 'plaintext';
-  };
+  }, []);
 
-  const handleEditorChange = (value: string | undefined) => {
-    if (activeFile && value !== undefined) {
-      onFileContentChange(activeFile.path, value);
+  // Debounced editor change handler (300ms) to prevent 60fps typing lag
+  const handleEditorChange = useCallback((value: string | undefined) => {
+    if (!activeFile || value === undefined) return;
+    
+    pendingChangeRef.current = { path: activeFile.path, value };
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
     }
-  };
+
+    debounceTimerRef.current = setTimeout(() => {
+      if (pendingChangeRef.current) {
+        onFileContentChange(pendingChangeRef.current.path, pendingChangeRef.current.value);
+        pendingChangeRef.current = null;
+      }
+    }, 300);
+  }, [activeFile, onFileContentChange]);
+
+  const handleEditorMount = useCallback((editor: any) => {
+    editorRef.current = editor;
+    const duration = performance.now() - mountTimeRef.current;
+    console.log(`[PERF] ⚡ Monaco Editor Ready: ${duration.toFixed(2)}ms`);
+  }, []);
+
+  const handleTabClick = useCallback((path: string) => {
+    if (path !== activeFilePath) {
+      flushPendingChanges();
+      onSelectFile(path);
+    }
+  }, [activeFilePath, flushPendingChanges, onSelectFile]);
 
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-300 overflow-hidden">
@@ -106,7 +131,7 @@ export default function CodeWorkspace({
             return (
               <button
                 key={file.path}
-                onClick={() => onSelectFile(file.path)}
+                onClick={() => handleTabClick(file.path)}
                 className={`flex items-center gap-1.5 px-3 py-2 text-xs font-mono font-medium border-r border-slate-900 transition-colors ${
                   isActive
                     ? 'bg-slate-900 text-white border-t-2 border-cyan-500'
@@ -121,7 +146,6 @@ export default function CodeWorkspace({
 
         {/* Toolbar controls */}
         <div className="flex items-center gap-2 py-1 pr-1">
-          {/* Zoom Actions */}
           <button
             onClick={() => setFontSize(prev => Math.min(prev + 1, 20))}
             className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
@@ -137,7 +161,6 @@ export default function CodeWorkspace({
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
 
-          {/* Minimap toggle */}
           <button
             onClick={() => setShowMinimap(!showMinimap)}
             className={`p-1 hover:bg-slate-800 rounded transition-colors ${showMinimap ? 'text-cyan-400' : 'text-slate-500'}`}
@@ -146,7 +169,6 @@ export default function CodeWorkspace({
             <Eye className="w-3.5 h-3.5" />
           </button>
 
-          {/* Theme switch */}
           <button
             onClick={() => setEditorTheme(prev => prev === 'vs-dark' ? 'light' : 'vs-dark')}
             className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
@@ -166,6 +188,7 @@ export default function CodeWorkspace({
             language={getMonacoLanguage(activeFile.path)}
             value={getNormalizedContent(activeFile.content)}
             onChange={handleEditorChange}
+            onMount={handleEditorMount}
             options={{
               fontSize: fontSize,
               minimap: { enabled: showMinimap },
@@ -180,9 +203,11 @@ export default function CodeWorkspace({
               padding: { top: 8 }
             }}
             loading={
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 gap-2 font-mono text-xs text-slate-500">
-                <Sparkles className="w-5 h-5 text-cyan-400 animate-spin" />
-                <span>Loading Editor Modules...</span>
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 gap-3 font-mono text-xs text-slate-500">
+                <div className="w-10 h-10 rounded-xl bg-cyan-500/10 flex items-center justify-center border border-cyan-500/20">
+                  <Code2 className="w-5 h-5 text-cyan-400 animate-pulse" />
+                </div>
+                <span>Initializing Monaco Editor...</span>
               </div>
             }
           />
@@ -195,3 +220,6 @@ export default function CodeWorkspace({
     </div>
   );
 }
+
+export default React.memo(CodeWorkspaceComponent);
+

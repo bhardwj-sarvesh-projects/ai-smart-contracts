@@ -9,6 +9,7 @@ import { Project } from '../types';
 interface DashboardViewProps {
   projects: Project[];
   theme: 'dark' | 'light';
+  isLoading?: boolean;
   onSelectProject: (id: string, tab?: 'workspace' | 'auditing') => void;
   onNewProjectClick: () => void;
   onDeleteProject: (id: string) => void;
@@ -17,6 +18,7 @@ interface DashboardViewProps {
 export default function DashboardView({
   projects,
   theme,
+  isLoading = false,
   onSelectProject,
   onNewProjectClick,
   onDeleteProject
@@ -244,7 +246,29 @@ export default function DashboardView({
       </div>
 
       {/* 4. Projects Workspaces Grid */}
-      {filteredProjects.length === 0 ? (
+      {isLoading && filteredProjects.length === 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+          {[1, 2, 3].map((n) => (
+            <div 
+              key={n}
+              className={`rounded-2xl border p-6 space-y-4 animate-pulse ${
+                theme === 'dark' ? 'bg-slate-900/30 border-slate-800' : 'bg-white border-slate-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="h-4 w-28 bg-slate-700/40 rounded" />
+                <div className="h-4 w-12 bg-slate-700/30 rounded-full" />
+              </div>
+              <div className="h-3 w-3/4 bg-slate-700/30 rounded" />
+              <div className="h-3 w-1/2 bg-slate-700/20 rounded" />
+              <div className="pt-4 border-t border-slate-800/40 flex justify-between items-center">
+                <div className="h-3 w-20 bg-slate-700/30 rounded" />
+                <div className="h-7 w-20 bg-slate-700/40 rounded-xl" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : filteredProjects.length === 0 ? (
         <div className={`p-12 text-center rounded-2xl border border-dashed flex flex-col items-center justify-center ${
           theme === 'dark' ? 'border-slate-800 bg-slate-900/10' : 'border-slate-200 bg-white/50'
         }`}>

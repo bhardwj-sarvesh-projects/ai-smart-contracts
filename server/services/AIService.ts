@@ -1,7 +1,8 @@
-import { ProviderFactory } from "../providers/ProviderFactory";
+import { ProviderFactory, isDummyOrEmptyKey } from "../providers/ProviderFactory";
 import { AIProvider, AIResponse, HealthResponse } from "../providers/AIProvider";
 import { GeminiProvider } from "../providers/GeminiProvider";
 import { UserConfig } from "./SettingsService";
+import { JSONNormalizer } from "./JSONNormalizer";
 
 export class AIService {
   // Centralized logging and statistics tracking
@@ -23,6 +24,7 @@ export class AIService {
   private static async executeWithFallback(
     settings: UserConfig,
     action: string,
+    actionType: 'plan' | 'workspace' | 'edit' | 'audit' | 'compile',
     executeOnProvider: (provider: AIProvider) => Promise<AIResponse>,
     maxRetries: number = 2
   ): Promise<any> {
@@ -36,14 +38,8 @@ export class AIService {
         const response = await executeOnProvider(primaryProvider);
         this.logRequest(primaryProvider, action, response, startTime);
 
-        // Sanitize markdown wrappers if present
-        const cleaned = response.text
-          .replace(/^\s*```json/i, "")
-          .replace(/```\s*$/, "")
-          .trim();
-
         try {
-          const parsed = JSON.parse(cleaned);
+          const parsed = JSONNormalizer.parseAndNormalize(response.text, actionType);
           return {
             data: parsed,
             model: response.model,
@@ -51,24 +47,43 @@ export class AIService {
             usage: response.usage
           };
         } catch (parseErr) {
-          console.warn(`[AI SERVICE] JSON parse failed on ${primaryProvider.name} (attempt ${attempt}/${maxRetries}). Raw response:`, response.text);
+          console.warn(`[AI SERVICE] JSON parse/normalization failed on ${primaryProvider.name} (attempt ${attempt}/${maxRetries}). Raw text preview:`, response.text ? response.text.slice(0, 200) : '');
           throw new Error(`AI response was not valid JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
         }
       } catch (err: any) {
         lastError = err;
         console.warn(`[AI SERVICE] Error using primary provider ${primaryProvider.name} (Attempt ${attempt}/${maxRetries}):`, err.message || err);
+        
+        // Fast break on unrecoverable authentication errors
+        const isAuthErr = err.isAuthError || err.status === 401 || err.status === 403 ||
+          (err.message && (
+            err.message.includes('401') ||
+            err.message.includes('403') ||
+            err.message.toLowerCase().includes('invalid_api_key') ||
+            err.message.toLowerCase().includes('incorrect api key') ||
+            err.message.toLowerCase().includes('unauthorized')
+          ));
+
+        if (isAuthErr) {
+          console.warn(`[AI SERVICE] Primary provider ${primaryProvider.name} encountered authentication error. Skipping retries to trigger fallback.`);
+          break;
+        }
+
         if (attempt < maxRetries) {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
     }
 
-    // If primary provider failed and we have a backend GEMINI_API_KEY, fallback to Gemini
-    if (primaryProvider.name !== "gemini" && process.env.GEMINI_API_KEY) {
+    // If primary provider failed, fallback to Gemini or OpenAI depending on available keys
+    const envGeminiKey = process.env.GEMINI_API_KEY && !isDummyOrEmptyKey(process.env.GEMINI_API_KEY, "gemini") ? process.env.GEMINI_API_KEY : "";
+    const envOpenAIKey = process.env.OPENAI_API_KEY && !isDummyOrEmptyKey(process.env.OPENAI_API_KEY, "openai") ? process.env.OPENAI_API_KEY : "";
+
+    if (primaryProvider.name !== "gemini" && envGeminiKey) {
       console.warn(`[AI SERVICE] Primary provider ${primaryProvider.name} failed all attempts. Gracefully falling back to server-side Gemini.`);
       
       const fallbackProvider = new GeminiProvider({
-        apiKey: process.env.GEMINI_API_KEY,
+        apiKey: envGeminiKey,
         model: "gemini-3.5-flash",
         temperature: settings.temperature || 0.2,
         maxTokens: settings.maxTokens || 2000
@@ -79,12 +94,7 @@ export class AIService {
         const response = await executeOnProvider(fallbackProvider);
         this.logRequest(fallbackProvider, action, response, startTime);
 
-        const cleaned = response.text
-          .replace(/^\s*```json/i, "")
-          .replace(/```\s*$/, "")
-          .trim();
-
-        const parsed = JSON.parse(cleaned);
+        const parsed = JSONNormalizer.parseAndNormalize(response.text, actionType);
         return {
           data: parsed,
           model: response.model,
@@ -96,37 +106,65 @@ export class AIService {
         console.error(`[AI SERVICE] Fallback provider Gemini also failed:`, fallbackErr.message || fallbackErr);
         throw new Error(`AI Service failure: Both primary provider (${primaryProvider.name}) and backup (Gemini) failed. Detail: ${fallbackErr.message || String(fallbackErr)}`);
       }
+    } else if (primaryProvider.name === "gemini" && envOpenAIKey) {
+      console.warn(`[AI SERVICE] Primary provider Gemini failed all attempts. Gracefully falling back to server-side OpenAI.`);
+      
+      const { OpenAIProvider } = await import("../providers/OpenAIProvider");
+      const fallbackProvider = new OpenAIProvider({
+        apiKey: envOpenAIKey,
+        model: "gpt-4o-mini",
+        temperature: settings.temperature || 0.2,
+        maxTokens: settings.maxTokens || 2000
+      });
+
+      const startTime = Date.now();
+      try {
+        const response = await executeOnProvider(fallbackProvider);
+        this.logRequest(fallbackProvider, action, response, startTime);
+
+        const parsed = JSONNormalizer.parseAndNormalize(response.text, actionType);
+        return {
+          data: parsed,
+          model: response.model,
+          durationMs: response.durationMs,
+          usage: response.usage,
+          fallbackUsed: true
+        };
+      } catch (fallbackErr: any) {
+        console.error(`[AI SERVICE] Fallback provider OpenAI also failed:`, fallbackErr.message || fallbackErr);
+        throw new Error(`AI Service failure: Both primary provider (Gemini) and backup (OpenAI) failed. Detail: ${fallbackErr.message || String(fallbackErr)}`);
+      }
     }
 
     throw lastError;
   }
 
   static async generatePlan(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {
-    return this.executeWithFallback(settings, "Generate Plan", (provider) =>
+    return this.executeWithFallback(settings, "Generate Plan", "plan", (provider) =>
       provider.plan(prompt, systemInstruction)
     );
   }
 
   static async generateWorkspace(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {
-    return this.executeWithFallback(settings, "Generate Workspace", (provider) =>
+    return this.executeWithFallback(settings, "Generate Workspace", "workspace", (provider) =>
       provider.generate(prompt, systemInstruction, "application/json")
     );
   }
 
   static async editWorkspace(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {
-    return this.executeWithFallback(settings, "Edit Workspace", (provider) =>
+    return this.executeWithFallback(settings, "Edit Workspace", "edit", (provider) =>
       provider.edit(prompt, systemInstruction)
     );
   }
 
   static async auditWorkspace(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {
-    return this.executeWithFallback(settings, "Audit Workspace", (provider) =>
+    return this.executeWithFallback(settings, "Audit Workspace", "audit", (provider) =>
       provider.audit(prompt, systemInstruction)
     );
   }
 
   static async compileAnalysis(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {
-    return this.executeWithFallback(settings, "Compile Analysis", (provider) =>
+    return this.executeWithFallback(settings, "Compile Analysis", "compile", (provider) =>
       provider.compileAnalysis(prompt, systemInstruction)
     );
   }

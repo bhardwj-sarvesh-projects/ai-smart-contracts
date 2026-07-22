@@ -87,6 +87,22 @@ export class GeminiProvider implements AIProvider {
         console.error("--------------------------------");
 
         console.warn(`[GEMINI PROVIDER] Attempt ${attempt} failed:`, err.message || err);
+
+        const isAuthErr = err.status === 401 || err.status === 403 ||
+          (err.message && (
+            err.message.includes("401") ||
+            err.message.includes("403") ||
+            err.message.toLowerCase().includes("api_key_invalid") ||
+            err.message.toLowerCase().includes("invalid_api_key") ||
+            err.message.toLowerCase().includes("unauthorized")
+          ));
+
+        if (isAuthErr) {
+          console.warn(`[GEMINI PROVIDER] Authentication error detected (401/403). Fast-failing attempt ${attempt} without retries.`);
+          err.isAuthError = true;
+          throw err;
+        }
+
         if (attempt < retries) {
           const delay = baseDelayMs * Math.pow(2, attempt - 1);
           await new Promise((resolve) => setTimeout(resolve, delay));

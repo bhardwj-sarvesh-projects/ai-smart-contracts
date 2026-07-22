@@ -33,7 +33,7 @@ interface HeaderProps {
   showToast?: (message: string, type?: 'success' | 'error' | 'info') => void;
 }
 
-export default function Header({
+function Header({
   projects,
   activeProject,
   onSelectProject,
@@ -324,63 +324,7 @@ export default function Header({
             {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
 
-          {/* SaaS Notifications System */}
-          <div className="relative">
-            <button
-              onClick={() => {
-                setShowNotificationsDropdown(!showNotificationsDropdown);
-                setHasUnreadNotifications(false);
-              }}
-              className={`p-2 rounded-lg border transition-all duration-200 cursor-pointer relative ${
-                isDark 
-                  ? 'border-slate-800 bg-slate-900/40 text-slate-400 hover:text-cyan-400 hover:border-slate-700' 
-                  : 'border-slate-200 bg-slate-50 text-slate-500 hover:text-blue-600 hover:bg-slate-100/60'
-              }`}
-              title="Notifications"
-            >
-              <Bell className="w-4 h-4" />
-              {hasUnreadNotifications && (
-                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
-              )}
-            </button>
-
-            <AnimatePresence>
-              {showNotificationsDropdown && (
-                <motion.div
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 8 }}
-                  transition={{ duration: 0.15 }}
-                  className={`absolute right-0 mt-2 w-80 rounded-xl border shadow-xl z-50 py-2 ${
-                    isDark ? 'border-slate-800 bg-slate-950 text-slate-200' : 'border-slate-200 bg-white text-slate-800'
-                  }`}
-                >
-                  <div className="px-4 py-2 border-b flex items-center justify-between">
-                    <span className="text-xs font-bold tracking-wider uppercase text-slate-400">Activity Monitor</span>
-                    <button 
-                      onClick={() => setShowNotificationsDropdown(false)}
-                      className="text-[10px] text-blue-500 hover:underline cursor-pointer"
-                    >
-                      Close
-                    </button>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-900">
-                    {notifications.map((n) => (
-                      <div key={n.id} className="p-3 hover:bg-slate-50 dark:hover:bg-slate-900/45 transition-colors flex gap-2.5 items-start">
-                        {n.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />}
-                        {n.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />}
-                        {n.type === 'info' && <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />}
-                        <div className="flex flex-col gap-0.5">
-                          <p className="text-xs font-medium leading-normal text-slate-600 dark:text-slate-300">{n.text}</p>
-                          <span className="text-[9px] text-slate-400 font-mono">{n.time}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+          
 
           {/* AI Orchestrator Label */}
           <span className={`hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[10px] font-bold tracking-wide uppercase transition-all ${
@@ -1086,3 +1030,5 @@ export default function Header({
     </>
   );
 }
+
+export default React.memo(Header);

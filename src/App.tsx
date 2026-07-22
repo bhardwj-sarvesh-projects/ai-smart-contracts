@@ -1,28 +1,38 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Header from './components/Header';
 import FileTree from './components/FileTree';
-import CodeWorkspace from './components/CodeWorkspace';
 import RightAssistant from './components/RightAssistant';
 import BlockchainSelector from './components/BlockchainSelector';
-import TemplateLibrary from './components/TemplateLibrary';
 import ImplementationPlanView from './components/ImplementationPlanView';
 import GenerationLoader from './components/GenerationLoader';
 import logo from './assets/logo.jpg';
-import VersionHistory from './components/VersionHistory';
-import PipelineDashboard from './components/PipelineDashboard';
 import DashboardView from './components/DashboardView';
-import AuditingHub from './components/AuditingHub';
-import AdminDashboard from './components/AdminDashboard';
 import { Project, ProjectFile, Vulnerability, Version } from './types';
 import { Layers, Sparkles, RefreshCw, AlertCircle, Library, FolderOpen, Code2, Zap, X } from 'lucide-react';
 import JSZip from 'jszip';
 import AuthView from './components/AuthView';
 import SettingsModal from './components/SettingsModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAuth } from './context/AuthContext';
+import { AppCache } from './lib/cache';
+import { GenerationService } from './features/generation/GenerationService';
+
+// Code-split heavy views to eliminate initial bundle costs & isolate Monaco/Compilers
+const CodeWorkspace = lazy(() => import('./components/CodeWorkspace'));
+const PipelineDashboard = lazy(() => import('./components/PipelineDashboard'));
+const TemplateLibrary = lazy(() => import('./components/TemplateLibrary'));
+const VersionHistory = lazy(() => import('./components/VersionHistory'));
+const AuditingHub = lazy(() => import('./components/AuditingHub'));
+const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
 
 export default function App() {
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<Project[]>(() => {
+    return AppCache.get<Project[]>('user_projects') || [];
+  });
+  const [isProjectsLoading, setIsProjectsLoading] = useState<boolean>(() => {
+    return AppCache.get('user_projects') ? false : true;
+  });
   const [activeProjectId, setActiveProjectId] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
@@ -93,9 +103,15 @@ export default function App() {
     }
   }, [toast]);
 
-  // Active AI Provider config
-  const [activeProvider, setActiveProvider] = useState('auto');
-  const [activeModel, setActiveModel] = useState('Intelligent Router');
+  // Active AI Provider config with cache fallback
+  const [activeProvider, setActiveProvider] = useState(() => {
+    const cachedSettings = AppCache.get<any>('user_settings');
+    return cachedSettings?.provider || 'auto';
+  });
+  const [activeModel, setActiveModel] = useState(() => {
+    const cachedSettings = AppCache.get<any>('user_settings');
+    return cachedSettings?.defaultModel || 'Intelligent Router';
+  });
 
   // Authed Fetch Helper
   const authedFetch = async (url: string, options: RequestInit = {}) => {
@@ -120,13 +136,24 @@ export default function App() {
     });
   };
 
-  // Load projects and settings when user changes
+  // Independent background startup load when user is present
   useEffect(() => {
     if (user) {
+      performance.mark('dashboard_first_paint');
+      if (performance.getEntriesByName('login_click').length > 0) {
+        performance.measure('Login Click -> Dashboard First Paint', 'login_click', 'dashboard_first_paint');
+        const measure = performance.getEntriesByName('Login Click -> Dashboard First Paint').pop();
+        if (measure) {
+          console.log(`[PERF] ⚡ Dashboard Shell Rendered: ${measure.duration.toFixed(2)}ms`);
+        }
+      }
+
+      // Execute each query completely independently
       fetchProjects();
       loadUserSettings();
     } else {
       setProjects([]);
+      setIsProjectsLoading(false);
     }
   }, [user]);
 
@@ -137,6 +164,14 @@ export default function App() {
         const data = await res.json();
         setActiveProvider(data.provider || 'openai');
         setActiveModel(data.defaultModel || 'Intelligent Router');
+        AppCache.set('user_settings', data, 300000);
+
+        performance.mark('settings_loaded');
+        if (performance.getEntriesByName('login_click').length > 0) {
+          performance.measure('Login Click -> Settings Loaded', 'login_click', 'settings_loaded');
+          const m = performance.getEntriesByName('Login Click -> Settings Loaded').pop();
+          if (m) console.log(`[PERF] ⚙️ Settings Loaded: ${m.duration.toFixed(2)}ms`);
+        }
       }
     } catch (err) {
       console.error('Failed to load user settings', err);
@@ -145,16 +180,27 @@ export default function App() {
 
   const fetchProjects = async () => {
     try {
+      setIsProjectsLoading(true);
       const res = await authedFetch('/api/projects');
       if (res.ok) {
         const data = await res.json();
         setProjects(data);
+        AppCache.set('user_projects', data, 300000);
         if (data.length > 0 && !activeProjectId) {
           setActiveProjectId(data[0].id);
+        }
+
+        performance.mark('projects_loaded');
+        if (performance.getEntriesByName('login_click').length > 0) {
+          performance.measure('Login Click -> Projects Loaded', 'login_click', 'projects_loaded');
+          const m = performance.getEntriesByName('Login Click -> Projects Loaded').pop();
+          if (m) console.log(`[PERF] 📁 Projects Loaded: ${m.duration.toFixed(2)}ms`);
         }
       }
     } catch (err) {
       console.error('Failed to load projects', err);
+    } finally {
+      setIsProjectsLoading(false);
     }
   };
 
@@ -171,11 +217,16 @@ export default function App() {
   };
 
   const handleSelectProjectWithTab = (id: string, targetTab?: 'workspace' | 'auditing') => {
+    const t0 = performance.now();
     setActiveProjectId(id);
     setShowVersionHistory(false);
     if (targetTab) {
       setActiveTab(targetTab);
     }
+    requestAnimationFrame(() => {
+      const duration = performance.now() - t0;
+      console.log(`[PERF] 🚀 Workspace Opened: ${duration.toFixed(2)}ms`);
+    });
   };
 
   const handleDeleteProject = async (id: string) => {
@@ -441,41 +492,23 @@ export default function App() {
       // Step 5: AI request started
       console.log("[CONTRACT GENERATION STEP] AI request started");
 
-      // Step 6: Backend request sent
-      console.log("[CONTRACT GENERATION STEP] Backend request sent");
+      // Step 6: EngineeringCore Pipeline Execution
+      console.log("[CONTRACT GENERATION STEP] EngineeringCore pipeline started");
 
-      const response = await authedFetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: config.prompt,
-          blockchain: config.blockchain,
-          language: config.language,
-          framework: config.framework,
-          contractType: config.contractType,
-          provider: activeProvider,
-          model: activeModel,
-          plan: approvedPlan
-        })
+      const aiGenerated = await GenerationService.generate({
+        prompt: config.prompt,
+        blockchain: config.blockchain,
+        language: config.language,
+        framework: config.framework,
+        authedFetch,
       });
 
-      // Step 7: Backend response received
-      console.log(`[CONTRACT GENERATION STEP] Backend response received: Status ${response.status}`);
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        const errMessage = errData.error || errData.message || 'AI Generation service failed';
-        console.error(`[CONTRACT GENERATION EXCEPTION] Backend responded with error: ${errMessage}`, errData);
-        throw new Error(errMessage);
-      }
-
-      const aiGenerated = await response.json();
       if (!aiGenerated) {
-        throw new Error("Invalid AI output: received null or empty response from backend.");
+        throw new Error("Invalid AI output: received null or empty response from EngineeringCore pipeline.");
       }
 
       // Step 8: Response parsed
-      console.log("[CONTRACT GENERATION STEP] Response parsed");
+      console.log("[CONTRACT GENERATION STEP] EngineeringCore output validated");
 
       const createRes = await authedFetch('/api/projects', {
         method: 'POST',
@@ -543,21 +576,32 @@ export default function App() {
         })
       });
 
-      if (!response.ok) throw new Error('Refactor failed');
+      if (!response.ok) throw new Error('Refactor request failed');
 
       const editResult = await response.json();
+
+      // Validate AI returned files array is non-empty and contains non-blank contents
+      const validNewFiles = Array.isArray(editResult.files) && editResult.files.length > 0
+        ? editResult.files.filter((f: any) => f && f.path && typeof f.content === 'string' && f.content.trim().length > 0)
+        : [];
+
+      if (validNewFiles.length === 0) {
+        console.warn('[AI REFRACTOR ROLLBACK] Refactor result contained empty files array or blank files. Aborting update to protect workspace.');
+        showToast('Refactor returned empty output. Workspace preserved without changes.', 'error');
+        return;
+      }
 
       const newVersion = {
         id: `v-${Date.now()}`,
         timestamp: new Date().toISOString(),
         prompt: instruction,
         files: activeProject.files,
-        summary: editResult.summary || 'Codebase modified.'
+        summary: editResult.summary || 'Codebase refactored.'
       };
 
       const updatedProject = {
         ...activeProject,
-        files: editResult.files || activeProject.files,
+        files: validNewFiles,
         audit: editResult.audit || activeProject.audit,
         versions: [newVersion, ...(activeProject.versions || [])]
       };
@@ -571,8 +615,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedProject)
       });
-    } catch (err) {
-      console.error('Failed to edit smart contract', err);
+
+      showToast('Workspace successfully updated!', 'success');
+    } catch (err: any) {
+      console.error('Failed to edit smart contract workspace:', err);
+      showToast(`Refactor error: ${err.message || String(err)}`, 'error');
     } finally {
       setIsProcessing(false);
     }
@@ -817,14 +864,16 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-slate-50 text-slate-800">
-        <div className="flex flex-col items-center">
-          <svg className="animate-spin h-8 w-8 text-blue-600 mb-4" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          <span className="text-sm font-medium text-slate-500 font-mono tracking-wider uppercase">
-            Loading Workspace...
+      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-slate-950 text-slate-100">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl bg-blue-600/20 flex items-center justify-center border border-blue-500/30 shadow-lg shadow-blue-500/10">
+            <svg className="animate-spin h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+          </div>
+          <span className="text-sm font-medium text-slate-400 font-mono tracking-wider uppercase">
+            Initializing AI Contracts...
           </span>
         </div>
       </div>
@@ -866,40 +915,63 @@ export default function App() {
       />
 
       {/* Active Tab Router */}
-      {activeTab === 'dashboard' ? (
+      {activeTab === 'dashboard' && (
         <DashboardView
           projects={projects}
           theme={theme}
+          isLoading={isProjectsLoading}
           onSelectProject={handleSelectProjectWithTab}
           onNewProjectClick={() => setShowNewProjectModal(true)}
           onDeleteProject={handleDeleteProject}
         />
-      ) : activeTab === 'auditing' ? (
-        <AuditingHub
-          projects={projects}
-          activeProject={activeProject}
-          onSelectProject={handleSelectProject}
-          onAuditProject={handleAuditProjectDirectly}
-          onApplyFixToProject={async (projectId, vuln) => {
-            if (activeProjectId !== projectId) {
-              setActiveProjectId(projectId);
-            }
-            await handleApplyAIFix(vuln);
-          }}
-          theme={theme}
-          isProcessing={isProcessing}
-          showToast={showToast}
-        />
-      ) : activeTab === 'admin' ? (
-        <AdminDashboard
-          theme={theme}
-          authedFetch={authedFetch}
-          onClose={() => setActiveTab('dashboard')}
-          showToast={showToast}
-        />
-      ) : (
-        /* Workspace View (with fallback empty splash state) */
-        activeProject ? (
+      )}
+
+      {activeTab === 'auditing' && (
+        <ErrorBoundary fallbackTitle="Auditing Hub Error">
+          <Suspense fallback={
+            <div className="flex-1 flex items-center justify-center p-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500"></div>
+            </div>
+          }>
+            <AuditingHub
+              projects={projects}
+              activeProject={activeProject}
+              onSelectProject={handleSelectProject}
+              onAuditProject={handleAuditProjectDirectly}
+              onApplyFixToProject={async (projectId, vuln) => {
+                if (activeProjectId !== projectId) {
+                  setActiveProjectId(projectId);
+                }
+                await handleApplyAIFix(vuln);
+              }}
+              theme={theme}
+              isProcessing={isProcessing}
+              showToast={showToast}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {activeTab === 'admin' && (
+        <ErrorBoundary fallbackTitle="Admin Dashboard Error">
+          <Suspense fallback={
+            <div className="flex-1 flex items-center justify-center p-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500"></div>
+            </div>
+          }>
+            <AdminDashboard
+              theme={theme}
+              authedFetch={authedFetch}
+              onClose={() => setActiveTab('dashboard')}
+              showToast={showToast}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {/* Workspace View (persisted in DOM to maintain Monaco Editor instances and undo stack) */}
+      <div className={`flex-1 flex-col min-h-0 relative overflow-hidden ${activeTab === 'workspace' ? 'flex' : 'hidden'}`}>
+        {activeProject ? (
           <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
             
             {/* Mobile Workspace Sub-navigation Tab Bar (Only visible below lg breakpoint) */}
@@ -981,12 +1053,23 @@ export default function App() {
               }`}>
                 {/* Upper Editor Workspace */}
                 <div className="flex-1 min-h-0 flex flex-col" style={{ height: (showDeployPanel && activeProject) ? `calc(100% - ${deployPanelHeight}px)` : '100%' }}>
-                  <CodeWorkspace
-                    files={activeProject.files}
-                    activeFilePath={activeProject.activeFilePath}
-                    onFileContentChange={handleFileContentChange}
-                    onSelectFile={handleSelectFile}
-                  />
+                  <ErrorBoundary fallbackTitle="Smart Contract Editor Error">
+                    <Suspense fallback={
+                      <div className="flex-1 flex flex-col items-center justify-center bg-slate-950 text-slate-500 font-mono text-xs gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-cyan-500/10 flex items-center justify-center border border-cyan-500/20">
+                          <Code2 className="w-5 h-5 text-cyan-400 animate-pulse" />
+                        </div>
+                        <span>Loading Smart Contract Editor...</span>
+                      </div>
+                    }>
+                      <CodeWorkspace
+                        files={activeProject.files}
+                        activeFilePath={activeProject.activeFilePath}
+                        onFileContentChange={handleFileContentChange}
+                        onSelectFile={handleSelectFile}
+                      />
+                    </Suspense>
+                  </ErrorBoundary>
                 </div>
 
                 {showDeployPanel && activeProject && (
@@ -1027,23 +1110,31 @@ export default function App() {
                         </button>
                       </div>
                       <div className="flex-1 overflow-hidden">
-                        <PipelineDashboard
-                          project={activeProject}
-                          onUpdateFiles={(newFiles) => {
-                            const updated = { ...activeProject, files: newFiles };
-                            setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
-                            authedFetch(`/api/projects/${activeProject.id}`, {
-                              method: 'PUT',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify(updated)
-                            });
-                          }}
-                          onCompile={handleCompile}
-                          onDeploy={handleDeploy}
-                          isCompiling={isCompiling}
-                          isDeploying={isDeploying}
-                          theme={theme}
-                        />
+                        <ErrorBoundary fallbackTitle="Pipeline Assembly Error">
+                          <Suspense fallback={
+                            <div className="flex-1 flex items-center justify-center p-8 text-slate-500 font-mono text-xs">
+                              <span className="animate-pulse">Loading Pipeline Engine...</span>
+                            </div>
+                          }>
+                            <PipelineDashboard
+                              project={activeProject}
+                              onUpdateFiles={(newFiles) => {
+                                const updated = { ...activeProject, files: newFiles };
+                                setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
+                                authedFetch(`/api/projects/${activeProject.id}`, {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(updated)
+                                });
+                              }}
+                              onCompile={handleCompile}
+                              onDeploy={handleDeploy}
+                              isCompiling={isCompiling}
+                              isDeploying={isDeploying}
+                              theme={theme}
+                            />
+                          </Suspense>
+                        </ErrorBoundary>
                       </div>
                     </div>
                   </>
@@ -1054,17 +1145,19 @@ export default function App() {
               <div className={`w-full lg:w-80 flex-shrink-0 flex-col min-h-0 ${
                 activeWorkspaceSubTab === 'assistant' ? 'flex' : 'hidden lg:flex'
               }`}>
-                <RightAssistant
-                  auditResult={activeProject.audit}
-                  files={activeProject.files}
-                  onApplyAIFix={handleApplyAIFix}
-                  onEditContract={handleEditContract}
-                  isProcessing={isProcessing}
-                  activeProvider={activeProvider}
-                  setActiveProvider={setActiveProvider}
-                  activeModel={activeModel}
-                  setActiveModel={setActiveModel}
-                />
+                <ErrorBoundary fallbackTitle="AI Assistant Error">
+                  <RightAssistant
+                    auditResult={activeProject.audit}
+                    files={activeProject.files}
+                    onApplyAIFix={handleApplyAIFix}
+                    onEditContract={handleEditContract}
+                    isProcessing={isProcessing}
+                    activeProvider={activeProvider}
+                    setActiveProvider={setActiveProvider}
+                    activeModel={activeModel}
+                    setActiveModel={setActiveModel}
+                  />
+                </ErrorBoundary>
               </div>
 
             </div>
@@ -1097,8 +1190,8 @@ export default function App() {
               </button>
             </div>
           </div>
-        )
-      )}
+        )}
+      </div>
 
       {/* New Project Selector Modal */}
       {showNewProjectModal && (
@@ -1112,12 +1205,14 @@ export default function App() {
 
       {/* Interactive Template Library Modal */}
       {showTemplateLibrary && (
-        <TemplateLibrary
-          onClose={() => setShowTemplateLibrary(false)}
-          onCloneTemplate={handleCloneTemplate}
-          activeProject={activeProject}
-          theme={theme}
-        />
+        <Suspense fallback={null}>
+          <TemplateLibrary
+            onClose={() => setShowTemplateLibrary(false)}
+            onCloneTemplate={handleCloneTemplate}
+            activeProject={activeProject}
+            theme={theme}
+          />
+        </Suspense>
       )}
 
       {/* 11-step Pre-generation Implementation Plan Modal */}
