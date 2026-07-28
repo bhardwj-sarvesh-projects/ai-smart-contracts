@@ -17,6 +17,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAuth } from './context/AuthContext';
 import { AppCache } from './lib/cache';
 import { GenerationService } from './features/generation/GenerationService';
+import { PatchEngine, WorkspaceManager } from './core/EngineeringCore';
 
 // Code-split heavy views to eliminate initial bundle costs & isolate Monaco/Compilers
 const CodeWorkspace = lazy(() => import('./components/CodeWorkspace'));
@@ -510,6 +511,10 @@ export default function App() {
       // Step 8: Response parsed
       console.log("[CONTRACT GENERATION STEP] EngineeringCore output validated");
 
+      // Ensure complete enterprise workspace structure (docs, scripts, tests, reports)
+      const workspaceMgr = WorkspaceManager.getInstance();
+      const completeFiles = workspaceMgr.ensureCompleteProjectStructure(config.name, aiGenerated.files || []);
+
       const createRes = await authedFetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -520,7 +525,7 @@ export default function App() {
           language: config.language,
           framework: config.framework,
           contractType: config.contractType,
-          files: aiGenerated.files || []
+          files: completeFiles
         })
       });
 
@@ -560,10 +565,12 @@ export default function App() {
     }
   };
 
-  // Edit/Refactor existing workspace with natural language
+  // Edit/Refactor existing workspace with natural language via WorkspaceManager
   const handleEditContract = async (instruction: string) => {
     if (!activeProject) return;
     setIsProcessing(true);
+
+    const workspaceMgr = WorkspaceManager.getInstance();
 
     try {
       const response = await authedFetch('/api/edit', {
@@ -580,31 +587,15 @@ export default function App() {
 
       const editResult = await response.json();
 
-      // Validate AI returned files array is non-empty and contains non-blank contents
-      const validNewFiles = Array.isArray(editResult.files) && editResult.files.length > 0
-        ? editResult.files.filter((f: any) => f && f.path && typeof f.content === 'string' && f.content.trim().length > 0)
-        : [];
+      // Apply patch via WorkspaceManager (creates snapshot, validates, overlays patch, verifies integrity)
+      const patchOutcome = workspaceMgr.applyPatch(activeProject, editResult, instruction);
 
-      if (validNewFiles.length === 0) {
-        console.warn('[AI REFRACTOR ROLLBACK] Refactor result contained empty files array or blank files. Aborting update to protect workspace.');
-        showToast('Refactor returned empty output. Workspace preserved without changes.', 'error');
+      if (!patchOutcome.success) {
+        showToast(`Workspace patch failed: ${patchOutcome.error || 'Unknown validation error'}. Workspace preserved.`, 'error');
         return;
       }
 
-      const newVersion = {
-        id: `v-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        prompt: instruction,
-        files: activeProject.files,
-        summary: editResult.summary || 'Codebase refactored.'
-      };
-
-      const updatedProject = {
-        ...activeProject,
-        files: validNewFiles,
-        audit: editResult.audit || activeProject.audit,
-        versions: [newVersion, ...(activeProject.versions || [])]
-      };
+      const updatedProject = patchOutcome.project;
 
       setProjects((prev) =>
         prev.map((p) => (p.id === activeProject.id ? updatedProject : p))
@@ -849,8 +840,12 @@ export default function App() {
   const handleExportZIP = () => {
     if (!activeProject) return;
 
+    const workspaceMgr = WorkspaceManager.getInstance();
+    // Validate and auto-populate all mandatory project structure files (docs, scripts, tests, reports)
+    const exportableFiles = workspaceMgr.ensureCompleteProjectStructure(activeProject.name, activeProject.files);
+
     const zip = new JSZip();
-    activeProject.files.forEach((file) => {
+    exportableFiles.forEach((file) => {
       zip.file(file.path, file.content);
     });
 
@@ -859,6 +854,7 @@ export default function App() {
       link.href = URL.createObjectURL(content);
       link.download = `${activeProject.name.toLowerCase().replace(/\s+/g, '-')}-workspace.zip`;
       link.click();
+      showToast("Project workspace exported successfully with complete enterprise structure!", "success");
     });
   };
 

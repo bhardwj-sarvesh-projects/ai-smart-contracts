@@ -12,3 +12,5 @@ export * from './validators/Validator';
 export * from './quality';
 export * from './services/EngineeringCoreLogger';
 export * from './registry/AdapterRegistry';
+export * from './patch/PatchEngine';
+export * from './workspace/WorkspaceManager';

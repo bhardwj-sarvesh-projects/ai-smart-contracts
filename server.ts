@@ -8,6 +8,7 @@ import { OPENAI_MODEL, AI_CONFIG } from "./server/config/ai";
 import { SettingsService, UserConfig } from "./server/services/SettingsService";
 import { isDummyOrEmptyKey } from "./server/providers/ProviderFactory";
 import settingsRouter from "./server/routes/settings";
+import { PatchEngine } from "./src/core/EngineeringCore/patch/PatchEngine";
 
 dotenv.config();
 
@@ -488,52 +489,54 @@ app.post("/api/edit", async (req, res) => {
   const userConfig = getActiveUserConfig(req);
   const { projectId, instruction, files } = req.body;
 
-  if (!instruction || !files) {
-    return res.status(400).json({ error: "Instruction and files are required" });
+  if (!instruction || !files || !Array.isArray(files)) {
+    return res.status(400).json({ error: "Instruction and files array are required" });
   }
 
-  console.log(`Editing workspace files using natural language. Instruction: "${instruction}"`);
+  console.log(`Editing workspace files using PatchEngine. Instruction: "${instruction}"`);
 
   const filesContext = files.map((f: any) => `### FILE: ${f.path}\nLanguage: ${f.language}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
 
   const editingPrompt = `
-You are a Principal Smart Contract Engineer. Your task is to intelligently modify the existing smart contract workspace based on this instruction:
+You are a Principal Smart Contract Engineer operating as a precise IDE Patch Engine (like Cursor / VS Code / GitHub Copilot).
+Your task is to modify ONLY the affected files in the smart contract workspace based on this instruction:
 "${instruction}"
 
-Keep ALL file names the same. You may modify existing files or generate new ones if needed (e.g., adding a library or test file).
-Maintain security, and do not remove existing functionalities unless explicitly instructed.
+IMPORTANT ARCHITECTURAL RULES:
+1. DO NOT return the entire workspace. Return ONLY the files that need to be modified, created, or deleted.
+2. Unchanged files must NOT be returned. They will remain byte-for-byte untouched in the workspace.
+3. DO NOT delete existing tests, scripts, interfaces, libraries, or documentation unless explicitly requested.
 
 Current workspace files:
 ${filesContext}
 
 YOU MUST output a JSON response conforming strictly to this JSON format:
 {
-  "files": [
+  "modifiedFiles": [
     {
-      "path": "path/to/file",
-      "content": "Full source code",
-      "language": "solidity|rust|move|javascript|markdown"
+      "path": "path/to/affected/file",
+      "content": "Full source code for updated file",
+      "language": "solidity|rust|move|javascript|typescript|markdown",
+      "reason": "Explanation of changes"
     }
   ],
+  "newFiles": [
+    {
+      "path": "path/to/new/file",
+      "content": "Full source code for new file",
+      "language": "solidity|rust|move|javascript|typescript|markdown",
+      "reason": "Why this file was created"
+    }
+  ],
+  "deletedFiles": [],
   "summary": "Summary of changes made based on the user instruction",
   "audit": {
-    "score": 90, // integer from 0 to 100
-    "codeQuality": 95, // integer from 0 to 100
-    "gasOptimization": 85, // integer from 0 to 100
-    "complexity": 3, // integer from 1 to 10
-    "summary": "High-level summary of the audit findings on the new code",
-    "vulnerabilities": [
-      {
-        "id": "vuln-1",
-        "title": "Vulnerability Title",
-        "severity": "critical|high|medium|low|informational",
-        "description": "Clear description of vulnerability",
-        "file": "path/to/vulnerable/file",
-        "line": 15,
-        "recommendation": "Step-by-step recommendation",
-        "fixAvailable": true
-      }
-    ]
+    "score": 90,
+    "codeQuality": 95,
+    "gasOptimization": 85,
+    "complexity": 3,
+    "summary": "High-level summary of the audit findings",
+    "vulnerabilities": []
   }
 }
 Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
@@ -541,8 +544,20 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 
   try {
     const result = await AIService.editWorkspace(userConfig, editingPrompt);
+
+    // Create immutable workspace snapshot
+    const snapshot = PatchEngine.createSnapshot(files);
+
+    // Apply patch engine to merge AI response with workspace snapshot
+    const mergedFiles = PatchEngine.applyPatch(snapshot, result.data);
+
     return res.json({
-      ...result.data,
+      files: mergedFiles,
+      modifiedFiles: result.data.modifiedFiles || [],
+      newFiles: result.data.newFiles || [],
+      deletedFiles: result.data.deletedFiles || [],
+      summary: result.data.summary || 'Workspace patched successfully.',
+      audit: result.data.audit,
       mode: "live"
     });
   } catch (err: any) {

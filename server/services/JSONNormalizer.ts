@@ -321,15 +321,29 @@ export class JSONNormalizer {
     }
 
     if (actionType === 'edit' || actionType === 'compile') {
+      const normalizePatchList = (list: any[]) => {
+        if (!Array.isArray(list)) return undefined;
+        return list.map((f: any) => ({
+          path: String(f.path || f.filePath || f.name || 'Contract.sol'),
+          content: this.cleanFileContent(f.content || f.code || ''),
+          language: String(f.language || 'solidity'),
+          reason: typeof f.reason === 'string' ? f.reason : undefined
+        }));
+      };
+
+      const normalizedModified = normalizePatchList(parsed.modifiedFiles);
+      const normalizedNew = normalizePatchList(parsed.newFiles);
+      const normalizedDeleted = Array.isArray(parsed.deletedFiles)
+        ? parsed.deletedFiles.map((p: any) => String(p))
+        : undefined;
+      const normalizedFiles = normalizePatchList(parsed.files);
+
       return {
         summary: typeof parsed.summary === 'string' ? parsed.summary : 'Updated contract files.',
-        files: Array.isArray(parsed.files)
-          ? parsed.files.map((f: any) => ({
-              path: String(f.path || f.filePath || f.name || 'Contract.sol'),
-              content: this.cleanFileContent(f.content || f.code || ''),
-              language: String(f.language || 'solidity')
-            }))
-          : [],
+        modifiedFiles: normalizedModified,
+        newFiles: normalizedNew,
+        deletedFiles: normalizedDeleted,
+        files: normalizedFiles || [],
         audit: parsed.audit || undefined,
         validationReport: parsed.validationReport || undefined
       };
