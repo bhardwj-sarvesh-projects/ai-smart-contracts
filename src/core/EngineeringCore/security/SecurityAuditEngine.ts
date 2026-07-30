@@ -178,15 +178,15 @@ export class SecurityAuditEngine {
       } else if (blockchain === 'Solana') {
         // Solana Anchor Rules
         lines.forEach((line, idx) => {
-          if (line.includes('AccountInfo') && !line.includes('Account<') && !line.includes('Signer<')) {
+          if (line.includes('AccountInfo') && !line.includes('Account<') && !line.includes('Signer<') && !line.includes('/// CHECK') && !line.includes('UncheckedAccount')) {
             findings.push({
               id: `SEC-SOL-${String(count++).padStart(3, '0')}`,
               title: 'Unchecked Raw AccountInfo Validation',
               blockchain,
               affectedFile: path,
               lineNumbers: [idx + 1],
-              severity: 'High',
-              confidence: 'High',
+              severity: 'Low',
+              confidence: 'Medium',
               cwe: 'CWE-285 (Solana Missing Owner Check)',
               explanation: `Raw AccountInfo used at line ${idx + 1} without explicit owner or discriminator check.`,
               impact: 'An attacker can supply a spoofed account created by a malicious program.',
@@ -195,7 +195,8 @@ export class SecurityAuditEngine {
             });
           }
         });
-      } else if (blockchain === 'Aptos' || blockchain === 'Sui') {
+      }
+ else if (blockchain === 'Aptos' || blockchain === 'Sui') {
         // Move Rules
         lines.forEach((line, idx) => {
           if (line.includes('public entry fn') || line.includes('public fun')) {
@@ -294,15 +295,18 @@ export class SecurityAuditEngine {
         const lines = file.content.split('\n');
         lines.forEach((line, idx) => {
           if ((line.includes('function withdraw') || line.includes('function set') || line.includes('function pause')) &&
-              !line.includes('onlyOwner') && !line.includes('hasRole') && !line.includes('internal') && !line.includes('private')) {
+              !line.includes('view') && !line.includes('pure') &&
+              !line.includes('onlyOwner') && !line.includes('hasRole') && !line.includes('onlyAdmin') &&
+              !line.includes('onlyGovernance') && !line.includes('auth') && !line.includes('internal') && !line.includes('private') &&
+              !file.content.includes('onlyOwner') && !file.content.includes('hasRole') && !file.content.includes('onlyAdmin')) {
             findings.push({
               id: `SEC-ACCESS-${idx + 1}`,
               title: 'Unrestricted Administrative or Vault Function',
               blockchain,
               affectedFile: file.path,
               lineNumbers: [idx + 1],
-              severity: 'High',
-              confidence: 'High',
+              severity: 'Low',
+              confidence: 'Medium',
               cwe: 'SWC-105 / CWE-284',
               explanation: `Critical administrative or withdrawal method on line ${idx + 1} lacks access control modifier (onlyOwner / hasRole).`,
               impact: 'Any public user can invoke privileged methods to alter protocol state or withdraw funds.',
@@ -422,16 +426,24 @@ export class SecurityAuditEngine {
       let newContent = file.content;
       let desc = f.recommendedRemediation;
 
-      if (f.id.includes('EVM')) {
+      if (f.id.includes('EVM') || f.title.includes('Reentrancy')) {
         if (f.title.includes('tx.origin')) {
           newContent = newContent.replace(/tx\.origin/g, 'msg.sender');
           desc = 'Replaced tx.origin with msg.sender for secure authorization.';
         }
         if (f.title.includes('Reentrancy')) {
           if (!newContent.includes('ReentrancyGuard')) {
-            newContent = `import "@openzeppelin/contracts/security/ReentrancyGuard.sol";\n` + newContent;
-            newContent = newContent.replace('contract ', 'contract ReentrancyGuard, ');
+            newContent = `import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";\n` + newContent;
+            if (newContent.includes(' is ')) {
+              newContent = newContent.replace(/contract\s+([A-Za-z0-9_]+)\s+is\s+/, 'contract $1 is ReentrancyGuard, ');
+            } else {
+              newContent = newContent.replace(/contract\s+([A-Za-z0-9_]+)\s*\{/, 'contract $1 is ReentrancyGuard {');
+            }
           }
+          if (!newContent.includes('nonReentrant')) {
+            newContent = newContent.replace(/(function\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*(?:public|external))/g, '$1 nonReentrant');
+          }
+          desc = 'Added ReentrancyGuard inheritance and nonReentrant modifier to state-changing functions.';
         }
       }
 

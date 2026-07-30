@@ -16,6 +16,8 @@ import { CompilerEngine } from '../compiler/CompilerEngine';
 import { CopilotEngine } from '../copilot/CopilotEngine';
 import { SecurityAuditEngine } from '../security/SecurityAuditEngine';
 import { DeploymentEngine, WalletConfig, NetworkConfig } from '../deployment/DeploymentEngine';
+import { SmartContractGenerationEngine } from '../generation/SmartContractGenerationEngine';
+import { ArchitectureValidationEngine } from '../architecture/ArchitectureValidationEngine';
 import { QualityGateEngine } from '../quality/QualityGateEngine';
 import { EngineeringCoreLogger } from '../services/EngineeringCoreLogger';
 
@@ -238,11 +240,57 @@ export class UniversalPipeline {
       finalProject.files.push({ path: 'DEPLOYMENT_REPORT.md', content: deploymentPrep.reportMarkdown, language: 'markdown' });
     }
 
+    // 21. Enterprise Client Delivery Standard Certification
+    options.onStepProgress?.('Certifying Enterprise Client Delivery Standard...');
+    EngineeringCoreLogger.logStage(context, 'Smart Contract Generation Engine');
+
+    // Ensure Test Suite is attached
+    const testSuite = SmartContractGenerationEngine.generateTestSuite(
+      finalProject.name || 'SmartContractProject',
+      finalProject.files || [],
+      context.requirements.blockchain,
+      context.requirements.framework
+    );
+    if (!finalProject.files.some(f => f.path === testSuite.path)) {
+      finalProject.files.push(testSuite);
+    }
+
+    // Ensure 8-Document Enterprise Documentation Suite is attached
+    const bizPlan = SmartContractGenerationEngine.extractBusinessLogic(options.userPrompt, context.requirements.blockchain, context.requirements.contractType);
+    const designPatterns = SmartContractGenerationEngine.selectDesignPatterns(options.userPrompt, context.requirements.blockchain);
+    const docSuite = SmartContractGenerationEngine.generateDocumentationSuite(
+      finalProject.name || 'SmartContractProject',
+      finalProject.files || [],
+      bizPlan,
+      designPatterns,
+      96
+    );
+    docSuite.forEach(doc => {
+      const existingIdx = finalProject.files.findIndex(f => f.path.toLowerCase() === doc.path.toLowerCase());
+      if (existingIdx >= 0) {
+        finalProject.files[existingIdx] = doc;
+      } else {
+        finalProject.files.push(doc);
+      }
+    });
+
+    // Certify Client Delivery Readiness
+    const clientDelivery = SmartContractGenerationEngine.evaluateClientDeliveryReady(
+      finalProject.files || [],
+      finalProject.name || 'SmartContractProject',
+      {
+        blockchain: context.requirements.blockchain,
+        framework: context.requirements.framework,
+        language: context.requirements.language
+      }
+    );
+    finalProject.files = clientDelivery.certifiedFiles;
+
     finalProject.requirements = context.requirements;
     finalProject.architecture = context.architecturePlan;
     finalProject.securityPlan = context.securityPlan;
 
-    options.onStepProgress?.('Project Certified & Ready.');
+    options.onStepProgress?.('Project Certified Client Delivery Ready.');
     EngineeringCoreLogger.finalizeLog(context);
     return finalProject;
   }
