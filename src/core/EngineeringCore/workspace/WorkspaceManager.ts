@@ -1,5 +1,8 @@
 import { Project, ProjectFile, AuditResult, Version } from '../../../types';
 import { PatchEngine, PatchResult, PatchItem } from '../patch/PatchEngine';
+import { ProjectIntegrityEngine } from '../validators/ProjectIntegrityEngine';
+import { DependencyValidationEngine } from '../validators/DependencyValidationEngine';
+import { CompilerEngine } from '../compiler/CompilerEngine';
 
 export interface WorkspaceSnapshot {
   id: string;
@@ -380,39 +383,55 @@ export class WorkspaceManager {
   }
 
   /**
+   * Rolls back a project workspace to its previous snapshot
+   */
+  public rollback(projectId: string): Project | undefined {
+    const snaps = this.snapshots.get(projectId);
+    if (!snaps || snaps.length === 0) return undefined;
+    const latestSnapshot = snaps[0];
+    const dummyProject: Project = {
+      id: projectId,
+      name: latestSnapshot.projectName,
+      description: 'Rolled back project',
+      blockchain: 'Ethereum/EVM',
+      language: 'Solidity',
+      framework: 'Foundry',
+      contractType: 'ERC20',
+      files: latestSnapshot.files,
+      activeFilePath: latestSnapshot.activeFilePath,
+      versions: [],
+      deployments: [],
+      createdAt: new Date().toISOString()
+    };
+    return this.restoreSnapshot(latestSnapshot, dummyProject);
+  }
+
+  /**
    * Ensures that a workspace contains all mandatory project structure & documentation assets
    * Required for enterprise compliance and export delivery
    */
-  public ensureCompleteProjectStructure(projectName: string, files: ProjectFile[]): ProjectFile[] {
-    const fileList = [...files];
-    const existingNorms = new Set(fileList.map(f => PatchEngine.normalizePath(f.path).toLowerCase()));
-
-    const addIfMissing = (path: string, defaultContent: string, language: string = 'markdown') => {
-      const norm = PatchEngine.normalizePath(path).toLowerCase();
-      if (!existingNorms.has(norm)) {
-        fileList.push({ path, content: defaultContent.trim(), language });
-        existingNorms.add(norm);
-      }
-    };
-
-    const name = projectName || 'BlockchainProject';
-
-    addIfMissing('README.md', `# ${name}\n\nEnterprise smart contract suite generated and validated by AI Contracts v1.0.\n\n## Overview\nThis repository contains production-ready smart contracts, interfaces, deployment scripts, unit tests, and security audit reports.\n\n## Structure\n- \`contracts/\`: Primary smart contract implementations\n- \`interfaces/\`: Contract interface definitions\n- \`libraries/\`: Shared utility libraries\n- \`scripts/\`: Automated deployment scripts\n- \`tests/\`: Comprehensive unit test suite\n- \`artifacts/\`: Compilation build artifacts\n- \`reports/\`: Security audit reports and threat models\n\n## Quick Start\n\`\`\`bash\nnpm install\nnpm test\n\`\`\``);
-
-    addIfMissing('ARCHITECTURE.md', `# System Architecture: ${name}\n\n## Overview\nHigh-level architectural specification, storage layouts, permission models, and module boundaries for ${name}.\n\n## Security & Access Control\n- Owner & Role-based Access Control (RBAC)\n- Checks-Effects-Interactions (CEI) Pattern\n- Custom Reentrancy Guards & Safe ERC20 Transfers\n\n## Integration Guidelines\nAll external integrations must interact through defined interfaces in \`interfaces/\`.`);
-
-    addIfMissing('SECURITY.md', `# Security Policy: ${name}\n\n## Threat Model & Security Controls\nThis smart contract system implements multi-layered security controls:\n1. State Validation & Custom Errors\n2. Reentrancy Protection\n3. Zero-Address Checks\n4. Strict Role-based Modifiers\n\n## Reporting Vulnerabilities\nPlease disclose security issues responsibly to security@aicontracts.io.`);
-
-    addIfMissing('DEPLOYMENT.md', `# Deployment Guide: ${name}\n\n## Prerequisites\n- Node.js >= 18.0.0\n- Hardhat / Foundry toolchain\n- RPC Endpoint & Private Key in \`.env\`\n\n## Instructions\n1. Configure \`.env\` using \`.env.example\`\n2. Execute deployment script in \`scripts/\`\n3. Verify contract on Etherscan / Explorer`);
-
-    addIfMissing('CHANGELOG.md', `# Changelog: ${name}\n\nAll notable changes to ${name} will be documented in this file.\n\n## [1.0.0] - ${new Date().toISOString().split('T')[0]}\n- Initial mainnet-ready architecture release\n- Integrated unit tests and security audit suite`);
-
-    addIfMissing('LICENSE', `MIT License\n\nCopyright (c) ${new Date().getFullYear()} ${name}\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software...`, 'text');
-
-    addIfMissing('.env.example', `# Environment Variables Template\nPRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000\nRPC_URL=https://mainnet.infura.io/v3/YOUR_KEY\nETHERSCAN_API_KEY=YOUR_ETHERSCAN_KEY`, 'plaintext');
-
-    addIfMissing('reports/SECURITY_REPORT.md', `# Security Audit Report: ${name}\n\n## Executive Summary\nAutomated security audit and formal analysis completed for ${name}.\n\n- Security Score: 95/100\n- Code Quality: 95/100\n- Gas Efficiency: 90/100\n- Reentrancy Guards: Verified\n- Access Control: Verified`);
-
-    return fileList;
+  public ensureCompleteProjectStructure(projectName: string, files: ProjectFile[], framework?: string, language?: string): ProjectFile[] {
+    const certification = ProjectIntegrityEngine.certifyProject(
+      files,
+      projectName,
+      undefined,
+      language,
+      framework
+    );
+    const toolchainCertification = DependencyValidationEngine.validateAndCertifyToolchain(
+      certification.certifiedFiles,
+      projectName,
+      undefined,
+      framework,
+      language
+    );
+    const compilerCertification = CompilerEngine.certifyCompilation(
+      toolchainCertification.certifiedFiles,
+      projectName,
+      undefined,
+      framework,
+      language
+    );
+    return compilerCertification.certifiedFiles;
   }
 }

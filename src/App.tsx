@@ -1115,7 +1115,11 @@ export default function App() {
                             <PipelineDashboard
                               project={activeProject}
                               onUpdateFiles={(newFiles) => {
-                                const updated = { ...activeProject, files: newFiles };
+                                const workspaceMgr = WorkspaceManager.getInstance();
+                                const updated = workspaceMgr.commitWorkspace(
+                                  { ...activeProject, files: newFiles },
+                                  'User updated workspace files'
+                                );
                                 setProjects(prev => prev.map(p => p.id === activeProject.id ? updated : p));
                                 authedFetch(`/api/projects/${activeProject.id}`, {
                                   method: 'PUT',
