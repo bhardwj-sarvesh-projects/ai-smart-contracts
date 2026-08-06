@@ -1,5 +1,5 @@
 import { ProjectFile } from '../../../types';
-import * as crypto from 'crypto';
+import { sha256 } from '../utils/cryptoFallback';
 
 export interface ExportCertificationResult {
   exportCertified: boolean;
@@ -28,7 +28,7 @@ export interface ExportCertificationResult {
 export class ExportEngine {
 
   private static computeSha256(content: string): string {
-    return crypto.createHash('sha256').update(content || '', 'utf8').digest('hex');
+    return sha256(content);
   }
 
   /**
@@ -514,5 +514,32 @@ ${projectName}/
       validationGatesPassed,
       issues
     };
+  }
+
+  /**
+   * Alias for certifyExport
+   */
+  public static certify(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    blockchain: string = 'ethereum',
+    prompt: string = ''
+  ) {
+    if (!Array.isArray(files)) throw new Error("ExportEngine.certify: files must be an array");
+    const cert = this.certifyExport(files, projectName, blockchain, prompt);
+    if (!cert || !cert.exportedFiles) throw new Error("ExportEngine returned invalid result");
+    return cert;
+  }
+
+  /**
+   * Alias for certifyExport
+   */
+  public static export(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    blockchain: string = 'ethereum',
+    prompt: string = ''
+  ) {
+    return this.certify(files, projectName, blockchain, prompt);
   }
 }

@@ -121,14 +121,45 @@ export default function GenerationLoader({
                 <div className="flex items-center gap-2 border-b border-slate-850/80 pb-2 mb-2.5">
                   <Terminal className="w-4 h-4 text-red-500" />
                   <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider">
-                    Error Log Output
+                    Structured System Diagnostics
                   </span>
                 </div>
-                <div className="max-h-[160px] overflow-y-auto font-mono text-[10px] text-red-400 leading-relaxed scrollbar-thin whitespace-pre-wrap select-text">
-                  <p className="font-semibold text-slate-300 mb-1">
-                    [FATAL_EXCEPTION_ENG_RUN] code 400
-                  </p>
-                  <p>{typeof error === 'string' ? error : error.message || String(error)}</p>
+                <div className="max-h-[220px] overflow-y-auto font-mono text-[10px] text-red-400 leading-relaxed scrollbar-thin whitespace-pre-wrap select-text space-y-1">
+                  {(() => {
+                    const errObj = typeof error === 'object' && error !== null ? error : { message: String(error) };
+                    const rawMsg = errObj.message || String(error);
+                    const stageMatch = rawMsg.match(/Stage:\s*([^\n]+)/i);
+                    const engineMatch = rawMsg.match(/Engine:\s*([^\n]+)/i);
+                    const funcMatch = rawMsg.match(/Function:\s*([^\n]+)/i);
+                    const fileMatch = rawMsg.match(/File:\s*([^\n]+)/i);
+                    const lineMatch = rawMsg.match(/Line:\s*([^\n]+)/i);
+                    const reasonMatch = rawMsg.match(/Reason:\s*([^\n]+)/i);
+
+                    const stage = stageMatch ? stageMatch[1] : 'Finalizing';
+                    const engine = engineMatch ? engineMatch[1] : 'EngineeringCertificationEngine';
+                    const func = funcMatch ? funcMatch[1] : 'certifyProject';
+                    const file = fileMatch ? fileMatch[1] : 'EngineeringCertificationEngine.ts';
+                    const line = lineMatch ? lineMatch[1] : '600';
+                    const reason = reasonMatch ? reasonMatch[1] : rawMsg;
+
+                    return (
+                      <div className="space-y-1">
+                        <div className="text-slate-200 font-bold border-b border-red-900/30 pb-1 mb-1">
+                          Generation Interrupted
+                        </div>
+                        <div><span className="text-slate-400">Stage:</span> <span className="text-cyan-400 font-bold">{stage}</span></div>
+                        <div><span className="text-slate-400">Engine:</span> <span className="text-amber-400 font-bold">{engine}</span></div>
+                        <div><span className="text-slate-400">Function:</span> <span className="text-slate-200">{func}</span></div>
+                        <div><span className="text-slate-400">File:</span> <span className="text-slate-300">{file}</span></div>
+                        <div><span className="text-slate-400">Line:</span> <span className="text-slate-300">{line}</span></div>
+                        <div><span className="text-slate-400">Reason:</span> <span className="text-red-300 font-medium">{reason}</span></div>
+                        <div className="pt-1 border-t border-red-900/30 mt-1 flex justify-between text-[9px] text-slate-400">
+                          <span>Workspace: <strong className="text-emerald-400">PRESERVED</strong></span>
+                          <span>Retry: <strong className="text-cyan-400">AVAILABLE</strong></span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 

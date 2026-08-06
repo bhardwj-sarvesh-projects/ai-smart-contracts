@@ -1,7 +1,7 @@
 import { AIProvider } from "./AIProvider";
 import { OpenAIProvider } from "./OpenAIProvider";
 import { GroqProvider } from "./GroqProvider";
-import { GeminiProvider } from "./GeminiProvider";
+import { OpenRouterProvider } from "./OpenRouterProvider";
 import { UserConfig } from "../services/SettingsService";
 
 export function isDummyOrEmptyKey(key: string, provider: string): boolean {
@@ -21,8 +21,8 @@ export function isDummyOrEmptyKey(key: string, provider: string): boolean {
     if (k.length < 15) return true;
   }
 
-  if (provider === "gemini") {
-    if (k.startsWith("sk-") || k.startsWith("gsk_")) return true;
+  if (provider === "openrouter") {
+    if (k.startsWith("gsk_")) return true;
   }
 
   return false;
@@ -30,22 +30,22 @@ export function isDummyOrEmptyKey(key: string, provider: string): boolean {
 
 export class ProviderFactory {
   static getProvider(settings: UserConfig): AIProvider {
-    let providerType = settings.provider || "gemini";
+    let providerType = settings.provider || "openrouter";
     let apiKey = settings.apiKey;
     let model = settings.defaultModel;
 
-    const envGeminiKey = process.env.GEMINI_API_KEY && !isDummyOrEmptyKey(process.env.GEMINI_API_KEY, "gemini") ? process.env.GEMINI_API_KEY : "";
+    const envOpenRouterKey = process.env.OPENROUTER_API_KEY && !isDummyOrEmptyKey(process.env.OPENROUTER_API_KEY, "openrouter") ? process.env.OPENROUTER_API_KEY : "";
     const envOpenAIKey = process.env.OPENAI_API_KEY && !isDummyOrEmptyKey(process.env.OPENAI_API_KEY, "openai") ? process.env.OPENAI_API_KEY : "";
 
     // Check if the chosen provider has a missing or dummy key
     if (isDummyOrEmptyKey(apiKey, providerType)) {
       console.warn(`[ProviderFactory] API key for "${providerType}" is missing or placeholder. Finding working server-side provider.`);
       
-      // Priority 1: Gemini (since Google AI Studio provides valid GEMINI_API_KEY)
-      if (envGeminiKey) {
-        providerType = "gemini";
-        apiKey = envGeminiKey;
-        model = "gemini-3.5-flash";
+      // Priority 1: OpenRouter (since Google AI Studio / user config provides OpenRouter fallback)
+      if (envOpenRouterKey) {
+        providerType = "openrouter";
+        apiKey = envOpenRouterKey;
+        model = "google/gemini-2.5-pro";
       }
       // Priority 2: OpenAI (if valid non-dummy key exists in env)
       else if (envOpenAIKey) {
@@ -55,22 +55,22 @@ export class ProviderFactory {
       }
     }
 
-    // Double check: if chosen is openai but key is dummy/invalid, switch to Gemini if available
+    // Double check: if chosen is openai but key is dummy/invalid, switch to OpenRouter if available
     if (providerType === "openai" && isDummyOrEmptyKey(apiKey, "openai")) {
-      if (envGeminiKey) {
-        console.warn(`[ProviderFactory] OpenAI key is dummy/invalid ("${apiKey.slice(0, 10)}..."). Switching to Gemini.`);
-        providerType = "gemini";
-        apiKey = envGeminiKey;
-        model = "gemini-3.5-flash";
+      if (envOpenRouterKey) {
+        console.warn(`[ProviderFactory] OpenAI key is dummy/invalid ("${apiKey.slice(0, 10)}..."). Switching to OpenRouter.`);
+        providerType = "openrouter";
+        apiKey = envOpenRouterKey;
+        model = "google/gemini-2.5-pro";
       }
     }
 
-    // Double check: if chosen is gemini but no key available, fallback to openai if valid
-    if (providerType === "gemini" && isDummyOrEmptyKey(apiKey, "gemini")) {
-      if (envGeminiKey) {
-        apiKey = envGeminiKey;
+    // Double check: if chosen is openrouter but no key available, fallback to openai if valid
+    if (providerType === "openrouter" && isDummyOrEmptyKey(apiKey, "openrouter")) {
+      if (envOpenRouterKey) {
+        apiKey = envOpenRouterKey;
       } else if (envOpenAIKey) {
-        console.warn(`[ProviderFactory] Gemini selected but no key. Falling back to OpenAI.`);
+        console.warn(`[ProviderFactory] OpenRouter selected but no key. Falling back to OpenAI.`);
         providerType = "openai";
         apiKey = envOpenAIKey;
         model = "gpt-4o-mini";
@@ -79,7 +79,7 @@ export class ProviderFactory {
 
     const config = {
       apiKey: apiKey,
-      model: model || (providerType === "gemini" ? "gemini-3.5-flash" : "gpt-4o-mini"),
+      model: model || (providerType === "openrouter" ? "google/gemini-2.5-pro" : "gpt-4o-mini"),
       temperature: settings.temperature,
       maxTokens: settings.maxTokens,
     };
@@ -89,13 +89,13 @@ export class ProviderFactory {
         return new OpenAIProvider(config);
       case "groq":
         return new GroqProvider(config);
-      case "gemini":
-        return new GeminiProvider(config);
+      case "openrouter":
+        return new OpenRouterProvider(config);
       default:
-        console.warn(`[ProviderFactory] Unknown provider "${providerType}". Falling back to GeminiProvider.`);
-        return new GeminiProvider({
-          apiKey: envGeminiKey || process.env.GEMINI_API_KEY || "",
-          model: "gemini-3.5-flash",
+        console.warn(`[ProviderFactory] Unknown provider "${providerType}". Falling back to OpenRouterProvider.`);
+        return new OpenRouterProvider({
+          apiKey: envOpenRouterKey || process.env.OPENROUTER_API_KEY || "",
+          model: "google/gemini-2.5-pro",
           temperature: settings.temperature,
           maxTokens: settings.maxTokens
         });

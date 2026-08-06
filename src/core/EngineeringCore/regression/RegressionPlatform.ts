@@ -116,4 +116,12 @@ export class RegressionPlatform {
     const platform = new RegressionPlatform();
     return platform.runFullRegressionSuite();
   }
+
+  public async finalize(): Promise<RegressionPlatformResult> {
+    return this.compilePlatformResults();
+  }
+
+  public static async finalize(): Promise<RegressionPlatformResult> {
+    return this.executeAndExportAll();
+  }
 }

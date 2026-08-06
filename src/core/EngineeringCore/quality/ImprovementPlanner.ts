@@ -19,17 +19,21 @@ CRITICAL INSTRUCTIONS:
 ${recommendationsList}
 3. Maintain existing working architecture and files unless they require quality fixes.
 4. Do NOT rewrite valid sections. Enhance code quality, NatSpec documentation, custom errors, security modifiers, unit tests, and deployment scripts.
-5. Return ONLY a valid JSON object matching:
+5. Return ONLY a valid JSON object matching this exact schema:
 {
-  "name": "${project.name}",
-  "description": "${project.description}",
-  "blockchain": "${project.blockchain}",
-  "language": "${project.language}",
-  "framework": "${project.framework}",
-  "contractType": "${project.contractType}",
-  "files": [
-    { "path": "path/to/file", "content": "full content", "language": "solidity" }
-  ]
+  "project": {
+    "name": "${project.name}",
+    "ecosystem": "${project.blockchain}",
+    "framework": "${project.framework}",
+    "language": "${project.language}",
+    "files": [
+      {
+        "path": "path/to/file",
+        "language": "solidity|rust|move|markdown|toml|json|typescript|javascript",
+        "content": "full complete file content here"
+      }
+    ]
+  }
 }`;
 
     const existingCodeSummary = project.files

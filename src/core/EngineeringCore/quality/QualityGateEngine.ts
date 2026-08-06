@@ -50,7 +50,8 @@ export class QualityGateEngine {
       // Step 1: Deterministic structural enrichment
       currentProject = ImprovementPlanner.enrichProjectDeterministically(currentProject, report);
 
-      // Step 2: AI self-improvement request if executor available
+      // Step 2: AI self-improvement request skipped to enforce single-file incremental generation constraint
+      /*
       if (options.aiExecutor && report.overallScore < 95) {
         try {
           const { systemInstruction, userPromptText } = ImprovementPlanner.buildTargetedImprovementPrompt(
@@ -74,6 +75,7 @@ export class QualityGateEngine {
           console.warn('[QualityGateEngine] AI self-improvement pass encountered warning:', e);
         }
       }
+      */
 
       // Re-review after improvement
       report = EngineeringReviewer.reviewProject(currentProject, currentPass);

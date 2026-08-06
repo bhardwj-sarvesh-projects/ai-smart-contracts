@@ -1,6 +1,6 @@
 import { ProviderFactory, isDummyOrEmptyKey } from "../providers/ProviderFactory";
 import { AIProvider, AIResponse, HealthResponse } from "../providers/AIProvider";
-import { GeminiProvider } from "../providers/GeminiProvider";
+import { OpenRouterProvider } from "../providers/OpenRouterProvider";
 import { UserConfig } from "./SettingsService";
 import { JSONNormalizer } from "./JSONNormalizer";
 
@@ -75,16 +75,16 @@ export class AIService {
       }
     }
 
-    // If primary provider failed, fallback to Gemini or OpenAI depending on available keys
-    const envGeminiKey = process.env.GEMINI_API_KEY && !isDummyOrEmptyKey(process.env.GEMINI_API_KEY, "gemini") ? process.env.GEMINI_API_KEY : "";
+    // If primary provider failed, fallback to OpenRouter or OpenAI depending on available keys
+    const envOpenRouterKey = process.env.OPENROUTER_API_KEY && !isDummyOrEmptyKey(process.env.OPENROUTER_API_KEY, "openrouter") ? process.env.OPENROUTER_API_KEY : "";
     const envOpenAIKey = process.env.OPENAI_API_KEY && !isDummyOrEmptyKey(process.env.OPENAI_API_KEY, "openai") ? process.env.OPENAI_API_KEY : "";
 
-    if (primaryProvider.name !== "gemini" && envGeminiKey) {
-      console.warn(`[AI SERVICE] Primary provider ${primaryProvider.name} failed all attempts. Gracefully falling back to server-side Gemini.`);
+    if (primaryProvider.name !== "openrouter" && envOpenRouterKey) {
+      console.warn(`[AI SERVICE] Primary provider ${primaryProvider.name} failed all attempts. Gracefully falling back to server-side OpenRouter.`);
       
-      const fallbackProvider = new GeminiProvider({
-        apiKey: envGeminiKey,
-        model: "gemini-3.5-flash",
+      const fallbackProvider = new OpenRouterProvider({
+        apiKey: envOpenRouterKey,
+        model: "google/gemini-2.5-pro",
         temperature: settings.temperature || 0.2,
         maxTokens: settings.maxTokens || 2000
       });
@@ -103,11 +103,11 @@ export class AIService {
           fallbackUsed: true
         };
       } catch (fallbackErr: any) {
-        console.error(`[AI SERVICE] Fallback provider Gemini also failed:`, fallbackErr.message || fallbackErr);
-        throw new Error(`AI Service failure: Both primary provider (${primaryProvider.name}) and backup (Gemini) failed. Detail: ${fallbackErr.message || String(fallbackErr)}`);
+        console.error(`[AI SERVICE] Fallback provider OpenRouter also failed:`, fallbackErr.message || fallbackErr);
+        throw new Error(`AI Service failure: Both primary provider (${primaryProvider.name}) and backup (OpenRouter) failed. Detail: ${fallbackErr.message || String(fallbackErr)}`);
       }
-    } else if (primaryProvider.name === "gemini" && envOpenAIKey) {
-      console.warn(`[AI SERVICE] Primary provider Gemini failed all attempts. Gracefully falling back to server-side OpenAI.`);
+    } else if (primaryProvider.name === "openrouter" && envOpenAIKey) {
+      console.warn(`[AI SERVICE] Primary provider OpenRouter failed all attempts. Gracefully falling back to server-side OpenAI.`);
       
       const { OpenAIProvider } = await import("../providers/OpenAIProvider");
       const fallbackProvider = new OpenAIProvider({
@@ -132,7 +132,7 @@ export class AIService {
         };
       } catch (fallbackErr: any) {
         console.error(`[AI SERVICE] Fallback provider OpenAI also failed:`, fallbackErr.message || fallbackErr);
-        throw new Error(`AI Service failure: Both primary provider (Gemini) and backup (OpenAI) failed. Detail: ${fallbackErr.message || String(fallbackErr)}`);
+        throw new Error(`AI Service failure: Both primary provider (OpenRouter) and backup (OpenAI) failed. Detail: ${fallbackErr.message || String(fallbackErr)}`);
       }
     }
 
@@ -195,4 +195,3 @@ export class AIService {
     }
   }
 }
-

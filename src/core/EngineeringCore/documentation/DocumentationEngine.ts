@@ -970,4 +970,43 @@ graph TD
       missingDocs: missingDocs.concat(missingDiagrams)
     };
   }
+
+  /**
+   * Alias for certifyDocumentation
+   */
+  public static certify(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    prompt: string = '',
+    blockchain: string = 'ethereum'
+  ) {
+    if (!Array.isArray(files)) throw new Error("DocumentationEngine.certify: files must be an array");
+    const cert = this.certifyDocumentation(files, projectName, prompt, blockchain);
+    if (!cert || !cert.certifiedFiles) throw new Error("DocumentationEngine returned invalid result");
+    return cert;
+  }
+
+  /**
+   * Alias for certifyDocumentation
+   */
+  public static finalize(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    prompt: string = '',
+    blockchain: string = 'ethereum'
+  ) {
+    return this.certify(files, projectName, prompt, blockchain);
+  }
+
+  /**
+   * Alias for certifyDocumentation
+   */
+  public static generate(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    prompt: string = '',
+    blockchain: string = 'ethereum'
+  ) {
+    return this.certify(files, projectName, prompt, blockchain);
+  }
 }

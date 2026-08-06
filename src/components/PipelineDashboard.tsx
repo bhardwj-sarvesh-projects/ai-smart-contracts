@@ -730,4 +730,8 @@ function PipelineDashboard({
   );
 }
 
+PipelineDashboard.finalize = function finalize() {
+  return { status: 'FINALIZED', timestamp: new Date().toISOString() };
+};
+
 export default React.memo(PipelineDashboard);

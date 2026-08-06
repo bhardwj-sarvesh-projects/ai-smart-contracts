@@ -14,6 +14,7 @@ export * from './validators/DependencyValidationEngine';
 export * from './compiler/CompilerEngine';
 export * from './quality';
 export * from './services/EngineeringCoreLogger';
+export * from './services/BackgroundTaskManager';
 export * from './registry/AdapterRegistry';
 export * from './patch/PatchEngine';
 export * from './workspace/WorkspaceManager';

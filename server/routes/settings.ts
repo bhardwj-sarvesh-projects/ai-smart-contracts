@@ -2,7 +2,6 @@ import { Router, Request, Response, NextFunction } from "express";
 import { SettingsService, UserConfig } from "../services/SettingsService";
 import { ProviderFactory } from "../providers/ProviderFactory";
 import OpenAI from "openai";
-import { GoogleGenAI } from "@google/genai";
 
 const router = Router();
 
@@ -36,7 +35,7 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
 }
 
 /**
- * GET current AI settings
+ * GET current saved AI settings for user
  */
 router.get("/", authMiddleware, (req: AuthenticatedRequest, res) => {
   const user = SettingsService.get(req.user!.uid);
@@ -47,9 +46,9 @@ router.get("/", authMiddleware, (req: AuthenticatedRequest, res) => {
       email: req.user!.email,
       displayName: req.user!.displayName || "",
       photo: req.user!.photoURL || "",
-      provider: "gemini",
+      provider: "openrouter",
       apiKey: "",
-      defaultModel: "gemini-3.5-flash",
+      defaultModel: "google/gemini-2.5-pro",
       temperature: 0.2,
       maxTokens: 2000,
     });
@@ -138,35 +137,11 @@ router.post("/models", authMiddleware, async (req: AuthenticatedRequest, res) =>
         modelsList = list.data
           .map(m => m.id)
           .sort();
-      } else if (provider === "gemini") {
-        const ai = new GoogleGenAI({ apiKey: resolvedKey });
-        const list = (await ai.models.list()) as any;
-        let modelsArray: any[] = [];
-        if (Array.isArray(list)) {
-          modelsArray = list;
-        } else if (list && Array.isArray(list.models)) {
-          modelsArray = list.models;
-        } else if (list && Array.isArray(list.data)) {
-          modelsArray = list.data;
-        } else if (list) {
-          try {
-            for (const m of list) {
-              modelsArray.push(m);
-            }
-          } catch (e) {
-            // list is not synchronous iterable, try async
-            try {
-              for await (const m of list) {
-                modelsArray.push(m);
-              }
-            } catch (e2) {
-              console.error("Failed to iterate models list", e2);
-            }
-          }
-        }
-        modelsList = modelsArray
-          .map(m => (m?.name || m?.id || "").replace("models/", ""))
-          .filter(name => name && !name.includes("embedding") && !name.includes("text-to-speech") && !name.includes("tts"))
+      } else if (provider === "openrouter") {
+        const client = new OpenAI({ apiKey: resolvedKey, baseURL: "https://openrouter.ai/api/v1", timeout: 5000 });
+        const list = await client.models.list();
+        modelsList = list.data
+          .map(m => m.id)
           .sort();
       } else {
         modelsList = getFallbackModels(provider);
@@ -270,12 +245,23 @@ function getFallbackModels(provider: string): string[] {
       return ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "o1-mini", "o3-mini"];
     case "groq":
       return ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"];
-    case "gemini":
-      return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"];
     case "anthropic":
       return ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"];
     case "openrouter":
-      return ["meta-llama/llama-3.3-70b-instruct", "deepseek/deepseek-chat", "google/gemini-2.5-flash"];
+      return [
+        "anthropic/claude-sonnet-4",
+        "anthropic/claude-opus-4.1",
+        "openai/gpt-5",
+        "openai/gpt-5-mini",
+        "google/gemini-2.5-pro",
+        "google/gemini-2.5-flash",
+        "deepseek/deepseek-r1",
+        "deepseek/deepseek-v3",
+        "meta-llama/llama-4-maverick",
+        "qwen/qwen3-coder",
+        "mistralai/mistral-large",
+        "x-ai/grok-4"
+      ];
     default:
       return ["gpt-4o-mini"];
   }

@@ -9,6 +9,8 @@ import { SettingsService, UserConfig } from "./server/services/SettingsService";
 import { isDummyOrEmptyKey } from "./server/providers/ProviderFactory";
 import settingsRouter from "./server/routes/settings";
 import { PatchEngine } from "./src/core/EngineeringCore/patch/PatchEngine";
+import { ProjectIntegrityEngine } from "./src/core/EngineeringCore/validators/ProjectIntegrityEngine";
+import { SecurityAuditEngine } from "./src/core/EngineeringCore/security/SecurityAuditEngine";
 
 dotenv.config();
 
@@ -27,7 +29,7 @@ function getActiveUserConfig(req: express.Request): UserConfig {
   let userConfig = userId ? SettingsService.getDecrypted(userId) : null;
 
   if (!userConfig) {
-    let activeProvider = AI_CONFIG.provider || "gemini";
+    let activeProvider = AI_CONFIG.provider || "openrouter";
     let activeKey = "";
     let activeModel = "";
 
@@ -37,17 +39,17 @@ function getActiveUserConfig(req: express.Request): UserConfig {
     } else if (activeProvider === "groq") {
       activeKey = AI_CONFIG.groq.apiKey;
       activeModel = AI_CONFIG.groq.model;
-    } else if (activeProvider === "gemini") {
-      activeKey = AI_CONFIG.gemini.apiKey;
-      activeModel = AI_CONFIG.gemini.model || "gemini-3.5-flash";
+    } else if (activeProvider === "openrouter") {
+      activeKey = AI_CONFIG.openrouter.apiKey;
+      activeModel = AI_CONFIG.openrouter.model || "google/gemini-2.5-pro";
     }
 
-    // Check if activeProvider key is missing or dummy, and fallback to Gemini if available
+    // Check if activeProvider key is missing or dummy, and fallback to OpenRouter if available
     if (isDummyOrEmptyKey(activeKey, activeProvider)) {
-      if (process.env.GEMINI_API_KEY && !isDummyOrEmptyKey(process.env.GEMINI_API_KEY, "gemini")) {
-        activeProvider = "gemini";
-        activeKey = process.env.GEMINI_API_KEY;
-        activeModel = "gemini-3.5-flash";
+      if (process.env.OPENROUTER_API_KEY && !isDummyOrEmptyKey(process.env.OPENROUTER_API_KEY, "openrouter")) {
+        activeProvider = "openrouter";
+        activeKey = process.env.OPENROUTER_API_KEY;
+        activeModel = "google/gemini-2.5-pro";
       }
     }
 
@@ -58,7 +60,7 @@ function getActiveUserConfig(req: express.Request): UserConfig {
       photo: photo || "",
       provider: activeProvider,
       apiKey: activeKey,
-      defaultModel: activeModel || "gemini-3.5-flash",
+      defaultModel: activeModel || "google/gemini-2.5-pro",
       temperature: 0.2,
       maxTokens: 2000,
       createdDate: new Date().toISOString(),
@@ -570,26 +572,275 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
   }
 });
 
+// POST /api/remediate
+app.post("/api/remediate", async (req, res) => {
+  const userConfig = getActiveUserConfig(req);
+  const { projectId, vulnerability, files } = req.body;
+
+  if (!vulnerability || !files || !Array.isArray(files)) {
+    return res.status(400).json({ error: "Vulnerability and files array are required" });
+  }
+
+  const projectName = "RemediationProject";
+  let currentFiles = [...files];
+  let lastSuccessfulState = [...files]; // Previous known clean state
+  const logs: string[] = [];
+
+  logs.push(`[REMEDIATION START] Initiating multi-stage recovery loop for "${vulnerability.title}"`);
+
+  let attempts = 0;
+  const maxAttempts = 3;
+  let loopSuccess = false;
+  let lastSummary = "";
+  let finalPatchResult: any = null;
+
+  while (attempts < maxAttempts && !loopSuccess) {
+    attempts++;
+    logs.push(`[ATTEMPT ${attempts}/${maxAttempts}] Executing self-healing step...`);
+
+    const fileToFix = vulnerability.file;
+    const affectedFile = currentFiles.find((f: any) => PatchEngine.normalizePath(f.path).toLowerCase() === PatchEngine.normalizePath(fileToFix).toLowerCase());
+
+    if (!affectedFile) {
+      const errMsg = `File ${fileToFix} not found in workspace.`;
+      logs.push(`[ERROR] ${errMsg}`);
+      break;
+    }
+
+    const otherFiles = currentFiles.filter((f: any) => f.path !== affectedFile.path && (f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move')));
+    const contextFilesText = otherFiles.map((f: any) => `### OTHER WORKSPACE FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
+
+    const remediationPrompt = `
+You are a Principal Smart Contract Security Engineer. Your task is to fix a specific security vulnerability in the following smart contract file.
+
+Vulnerability Details:
+- ID: ${vulnerability.id}
+- Title: ${vulnerability.title}
+- Severity: ${vulnerability.severity}
+- Affected File: ${vulnerability.file}
+- Affected Line: ${vulnerability.line}
+- Affected Function: ${vulnerability.affectedFunction || 'N/A'}
+- Description: ${vulnerability.description}
+- Recommendation: ${vulnerability.recommendation}
+
+Affected File Content (${vulnerability.file}):
+\`\`\`
+${affectedFile.content}
+\`\`\`
+
+${contextFilesText ? `Other Workspace Files (for context/imports reference):\n${contextFilesText}` : ''}
+
+You MUST output a precise, targeted fix. Return ONLY the files that need to be modified.
+Do NOT rewrite or alter unrelated parts of the codebase. Return valid code matching the original structure.
+
+YOU MUST output a JSON response conforming strictly to this format:
+{
+  "modifiedFiles": [
+    {
+      "path": "${vulnerability.file}",
+      "content": "Full updated source code for this file with the vulnerability completely resolved",
+      "language": "${affectedFile.language || 'solidity'}",
+      "reason": "Fix ${vulnerability.title} in function ${vulnerability.affectedFunction || ''}"
+    }
+  ],
+  "newFiles": [],
+  "deletedFiles": [],
+  "summary": "Detailed explanation of the security fix applied to resolve ${vulnerability.title}"
+}
+Do NOT output any conversational text or markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
+`;
+
+    try {
+      logs.push(`[PATCH] Requesting AI patch generation for "${vulnerability.title}" (Attempt ${attempts})...`);
+      const result = await AIService.editWorkspace(userConfig, remediationPrompt);
+      const patchData = result.data;
+      lastSummary = patchData.summary || "AI remediation patch generated.";
+      finalPatchResult = patchData;
+
+      // Apply patch to current workspace state
+      const patchedFiles = PatchEngine.applyPatch(currentFiles, patchData);
+
+      // --- STEP 2: VALIDATE ---
+      logs.push(`[VALIDATE] Certifying project structure and ecosystem isolation validation...`);
+      const integrity = ProjectIntegrityEngine.certifyProject(
+        patchedFiles,
+        projectName,
+        vulnerability.blockchain || 'Ethereum/EVM'
+      );
+
+      if (integrity.report.overallStatus === 'FAIL') {
+        const warning = `Workspace certification validation failed during integrity checks. Reverting and retrying...`;
+        logs.push(`[WARN] ${warning}`);
+        currentFiles = [...lastSuccessfulState]; // Revert immediately
+        continue;
+      }
+
+      // --- STEP 3: COMPILE ---
+      logs.push(`[COMPILE] Running compiler analysis to ensure no syntax errors or unresolved imports...`);
+      const filesContextForCompile = patchedFiles.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
+      const compilerPrompt = `
+Analyze the following source files and determine if they compile successfully.
+Workspace files:
+${filesContextForCompile}
+Format the response strictly as a JSON object:
+{
+  "success": true|false,
+  "errors": []
+}
+Do NOT output markdown wrappers. Return only raw JSON.
+`;
+      const compileResult = await AIService.compileAnalysis(userConfig, compilerPrompt);
+      const isCompiled = compileResult.data?.success;
+
+      if (!isCompiled) {
+        const errors = (compileResult.data?.errors || []).map((e: any) => `${e.file}:${e.line} - ${e.explanation}`).join('; ');
+        logs.push(`[COMPILE FAIL] Compiler verification failed: ${errors || 'Unknown syntax error'}`);
+        logs.push(`[REVERT] Reverting to previous known clean state immediately. Do not commit broken files.`);
+        currentFiles = [...lastSuccessfulState]; // Revert immediately to previous known clean state
+        continue; // Try next attempt
+      }
+
+      logs.push(`[COMPILE PASS] Compiler verification succeeded with zero warnings and errors.`);
+
+      // --- STEP 4: RE-AUDIT ---
+      logs.push(`[RE-AUDIT] Running security scan on compiled files to ensure vulnerability is fully resolved...`);
+      const auditRes = SecurityAuditEngine.certifySecurity(
+        patchedFiles,
+        projectName,
+        vulnerability.blockchain || 'Ethereum/EVM'
+      );
+
+      const remainingCriticalOrHigh = auditRes.auditResult.findings.filter(f => f.severity === 'Critical' || f.severity === 'High');
+      const hasSpecificVulnRemaining = auditRes.auditResult.findings.some(f => 
+        f.title.toLowerCase().includes(vulnerability.title.toLowerCase()) || 
+        f.id === vulnerability.id
+      );
+
+      if (remainingCriticalOrHigh.length > 0 || hasSpecificVulnRemaining) {
+        logs.push(`[AUDIT FAIL] Re-audit discovered remaining vulnerabilities: ${auditRes.auditResult.findings.map(f => `[${f.severity}] ${f.title}`).join(', ')}`);
+        logs.push(`[REVERT] Reverting and preparing next correction pass.`);
+        currentFiles = [...lastSuccessfulState]; // Revert immediately
+        continue;
+      }
+
+      logs.push(`[RE-AUDIT PASS] Re-audit certified zero remaining high/critical vulnerabilities.`);
+
+      // --- STEP 5: COMMIT ---
+      logs.push(`[COMMIT] State verification passed! Committing patched and certified files.`);
+      lastSuccessfulState = [...patchedFiles];
+      currentFiles = [...patchedFiles];
+      loopSuccess = true;
+      break;
+
+    } catch (err: any) {
+      logs.push(`[ERROR] Attempt ${attempts} failed with exception: ${err.message || String(err)}`);
+      currentFiles = [...lastSuccessfulState]; // Revert immediately
+    }
+  }
+
+  if (loopSuccess) {
+    logs.push(`[SUCCESS] Remediation loop complete. Vulnerability resolved successfully in ${attempts} attempts.`);
+    return res.json({
+      success: true,
+      files: lastSuccessfulState,
+      patch: finalPatchResult,
+      summary: lastSummary,
+      logs
+    });
+  } else {
+    logs.push(`[FAIL] Remediation loop failed to resolve the vulnerability after ${attempts} attempts.`);
+    return res.json({
+      success: false,
+      files: lastSuccessfulState, // Reverted to original clean state
+      error: `Self-healing remediation loop failed after ${attempts} attempts.`,
+      logs
+    });
+  }
+});
+
+function validateAndSanitizeVulnerabilities(vulnerabilities: any[]): void {
+  if (!vulnerabilities || !Array.isArray(vulnerabilities)) {
+    return;
+  }
+  for (const v of vulnerabilities) {
+    if (!v.file || typeof v.file !== 'string' || v.file.trim() === '' || v.file.toLowerCase() === 'n/a') {
+      throw new Error(`Audit finding missing or invalid coordinate "file". Provided: "${v.file}"`);
+    }
+    const lineNum = Number(v.line);
+    if (!v.line || isNaN(lineNum) || lineNum <= 0) {
+      throw new Error(`Audit finding missing or invalid coordinate "line". Provided: "${v.line}"`);
+    }
+    const colNum = Number(v.column);
+    if (v.column === undefined || isNaN(colNum) || colNum < 0) {
+      throw new Error(`Audit finding missing or invalid coordinate "column" (must be non-negative integer). Provided: "${v.column}"`);
+    }
+    const funcName = v.affectedFunction || v.function;
+    if (!funcName || typeof funcName !== 'string' || funcName.trim() === '' || funcName.toLowerCase() === 'n/a') {
+      throw new Error(`Audit finding missing or invalid coordinate "affectedFunction".`);
+    }
+
+    const severity = v.severity;
+    const allowedSeverities = ['Critical', 'High', 'Medium', 'Low', 'Informational'];
+    if (!severity || !allowedSeverities.includes(severity)) {
+      throw new Error(`Audit finding has invalid, missing, or lowercase severity: "${severity}". Allowed values: Critical | High | Medium | Low | Informational.`);
+    }
+
+    const snippet = v.snippet || v.codeSnippet || v.exploitExample;
+    if (!snippet || typeof snippet !== 'string' || snippet.trim() === '' || snippet.toLowerCase() === 'n/a') {
+      throw new Error(`Audit finding missing or invalid coordinate "snippet" / "codeSnippet".`);
+    }
+
+    if (!v.recommendation || typeof v.recommendation !== 'string' || v.recommendation.trim() === '' || v.recommendation.toLowerCase() === 'n/a') {
+      throw new Error(`Audit finding missing or invalid coordinate "recommendation".`);
+    }
+  }
+}
+
 // POST /api/audit
 app.post("/api/audit", async (req, res) => {
   try {
     const userConfig = getActiveUserConfig(req);
-    const { files } = req.body;
+    const { files, modifiedFiles, previousAudit } = req.body;
 
     if (!files || !Array.isArray(files) || files.length === 0) {
       return res.status(400).json({ error: "Files are required for auditing" });
     }
 
-    const filesContext = files.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
+    let filesToAudit = files;
+    let isDifferential = false;
+
+    if (Array.isArray(modifiedFiles) && modifiedFiles.length > 0 && previousAudit) {
+      const normalizedModified = modifiedFiles.map((p: any) => PatchEngine.normalizePath(p).toLowerCase());
+      filesToAudit = files.filter((f: any) => normalizedModified.includes(PatchEngine.normalizePath(f.path).toLowerCase()));
+      isDifferential = true;
+      console.log(`[DIFFERENTIAL AUDIT] Executing audit on modified files only: ${modifiedFiles.join(", ")}`);
+    }
+
+    if (filesToAudit.length === 0) {
+      return res.json(previousAudit || { score: 100, vulnerabilities: [], summary: "No modified files to audit." });
+    }
+
+    const filesContext = filesToAudit.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
 
     const auditPrompt = `
 You are an elite Smart Contract Security Auditor and Threat Modeler. Analyze the following smart contracts and identify vulnerabilities, gas inefficiencies, or structural code quality issues.
 Workspace files:
 ${filesContext}
 
+${isDifferential ? `ATTENTION: This is a DIFFERENTIAL security audit. You are ONLY auditing the following modified files: ${modifiedFiles?.join(", ")}. Please focus your analysis and report vulnerabilities found ONLY in these files.` : ''}
+
+IMPORTANT SECURITY AUDITING MANDATES:
+1. Every vulnerability finding MUST specify an exact, precise "file" path and a non-zero, exact "line" number where the issue actually resides.
+2. Every vulnerability finding MUST specify a precise "column" number (integer starting at 1).
+3. Every vulnerability finding MUST specify the specific function name in "affectedFunction" (e.g., "withdraw(uint256)") rather than generic descriptions.
+4. Every vulnerability finding MUST specify a "severity" mapping strictly to one of: "Critical", "High", "Medium", "Low", "Informational". Case sensitivity is strictly enforced. Lowercase severities (e.g., "critical") or missing values are forbidden.
+5. Every vulnerability finding MUST specify a non-empty code "snippet" representing the exact vulnerable line(s) of code.
+6. Every vulnerability finding MUST specify a clear, non-empty "recommendation" string to resolve the issue.
+7. Under NO circumstances should you return "N/A", "Multiple Modules", "General", or "0" for the file, line, column, snippet, recommendation, or affectedFunction fields.
+
 YOU MUST output a JSON response conforming strictly to this format:
 {
-  "score": 90, // Overall security score (0 to 100)
+  "score": 90, // Security score for these audited files (0 to 100)
   "codeQuality": 95, // Code quality score (0 to 100)
   "gasOptimization": 85, // Gas efficiency score (0 to 100)
   "complexity": 3, // Contract complexity index (1 to 10)
@@ -617,16 +868,18 @@ YOU MUST output a JSON response conforming strictly to this format:
     {
       "id": "vuln-1",
       "title": "Reentrancy vulnerability in withdraw function",
-      "severity": "critical", // Must be one of: critical | high | medium | low | informational
+      "severity": "Critical", // Must be strictly capitalized: Critical | High | Medium | Low | Informational
       "description": "State variable updated after external transfer allowing caller to reenter prior to state finalization.",
       "file": "path/to/file",
       "line": 15,
+      "column": 5,
       "affectedFunction": "withdraw(uint256)",
       "technicalExplanation": "The function performs an external transfer using message call prior to updating the user's mapped balance state, violating the Checks-Effects-Interactions pattern.",
       "whyThisIssueOccurs": "The developer did not call the ReentrancyGuard modifier or update the balance state before triggering the transfer.",
       "possibleAttackScenario": "An attacker uses a malicious fallback contract to call withdraw recursively, draining the contract pool.",
       "potentialFinancialImpact": "Loss of all stored user deposits and native pool liquidity.",
       "exploitExample": "contract Exploit { fallback() external payable { target.withdraw(1 ether); } }",
+      "snippet": "(bool success, ) = msg.sender.call{value: amount}('');",
       "recommendation": "Update user balances BEFORE triggering the external transfer, or use the nonReentrant modifier from OpenZeppelin.",
       "codeExample": "mapping(address => uint255) balances;\nfunction withdraw(uint256 amount) external {\n  uint255 bal = balances[msg.sender];\n  require(bal >= amount);\n  balances[msg.sender] -= amount;\n  (bool success, ) = msg.sender.call{value: amount}('');\n  require(success);\n}",
       "bestPracticeReference": "ConsenSys Smart Contract Best Practices - Checks-Effects-Interactions Pattern",
@@ -645,8 +898,41 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 `;
 
     const result = await AIService.auditWorkspace(userConfig, auditPrompt);
+    let finalAudit = result.data;
+
+    if (isDifferential && previousAudit) {
+      const normalizedModified = modifiedFiles.map((p: any) => PatchEngine.normalizePath(p).toLowerCase());
+      // Filter out old findings for files that we just re-audited
+      const unchangedFindings = (previousAudit.vulnerabilities || []).filter((v: any) => {
+        const normFile = PatchEngine.normalizePath(v.file).toLowerCase();
+        return !normalizedModified.includes(normFile);
+      });
+
+      // Combine remaining old findings and newly detected ones
+      const mergedFindings = [...unchangedFindings, ...(result.data.vulnerabilities || [])];
+
+      // Calculate updated overall security score based on delta
+      const criticalCount = mergedFindings.filter((f: any) => f.severity === 'Critical').length;
+      const highCount = mergedFindings.filter((f: any) => f.severity === 'High').length;
+      const mediumCount = mergedFindings.filter((f: any) => f.severity === 'Medium').length;
+      const lowCount = mergedFindings.filter((f: any) => f.severity === 'Low').length;
+
+      const scoreOffset = (criticalCount * 25) + (highCount * 15) + (mediumCount * 5) + (lowCount * 2);
+      const overallScore = Math.max(10, 100 - scoreOffset);
+
+      finalAudit = {
+        ...result.data,
+        vulnerabilities: mergedFindings,
+        score: overallScore,
+        summary: `Differential audit completed. Modified files re-scanned. ${result.data.summary || ''}`
+      };
+    }
+
+    // Programmatically validate audit coordinates before sending response!
+    validateAndSanitizeVulnerabilities(finalAudit.vulnerabilities);
+
     return res.json({
-      ...result.data,
+      ...finalAudit,
       mode: "live"
     });
   } catch (err: any) {
@@ -678,6 +964,17 @@ Check for any syntax errors, unresolved imports, unmatched brackets, or undeclar
 Workspace files:
 ${filesContext}
 
+IMPORTANT COMPILER DIAGNOSTIC MANDATES:
+For every compilation warning or error, you MUST provide precise error metadata:
+1. "file": The exact path of the file that triggered the compiler warning/error (never empty, never "N/A").
+2. "line": The exact integer line number (never 0, never "N/A").
+3. "column": The exact integer column number (never "N/A").
+4. "severity": Either "error" or "warning".
+5. "classification": One of "Syntax" | "Import" | "Dependency" | "Inheritance" | "Visibility" | "Access Control" | "Undefined Event" | "Undefined Error" | "Undefined Variable" | "Type Mismatch" | "Constructor" | "Trait" | "Move Module" | "Anchor Account" | "Compiler Version" | "Framework Version" | "Configuration" | "Unknown".
+6. "codeSnippet": The exact faulty line of code or code snippet.
+7. "explanation": A detailed, friendly explanation of why the compiler failed at this point.
+8. "suggestedFix": Clear, precise, actionable instructions to repair this specific issue.
+
 Format the response strictly as a JSON object:
 {
   "success": true|false,
@@ -685,8 +982,13 @@ Format the response strictly as a JSON object:
     {
       "file": "path/to/file",
       "line": 12,
-      "severity": "error|warning",
-      "message": "Detailed compiler message"
+      "column": 1,
+      "severity": "error",
+      "classification": "Syntax",
+      "codeSnippet": "contract MyContract {",
+      "explanation": "Mismatched curly braces",
+      "suggestedFix": "Add a closing brace at the end of the contract.",
+      "message": "SyntaxError: Mismatched curly braces"
     }
   ],
   "logs": [
@@ -702,7 +1004,17 @@ Do NOT output markdown wrappers like \`\`\`json. Return only raw, parsing-valid 
     const parsed = result.data;
     return res.json({
       success: parsed.success,
-      errors: parsed.errors || [],
+      errors: (parsed.errors || []).map((e: any) => ({
+        file: e.file || "Unknown file",
+        line: typeof e.line === 'number' ? e.line : 1,
+        column: typeof e.column === 'number' ? e.column : 1,
+        severity: e.severity || "error",
+        classification: e.classification || "Unknown",
+        codeSnippet: e.codeSnippet || "N/A",
+        explanation: e.explanation || e.message || "N/A",
+        suggestedFix: e.suggestedFix || "N/A",
+        message: e.message || "N/A"
+      })),
       logs: parsed.logs || [],
       timestamp: new Date().toISOString()
     });

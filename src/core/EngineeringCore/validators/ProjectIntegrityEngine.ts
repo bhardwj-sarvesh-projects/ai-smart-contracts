@@ -1,5 +1,6 @@
 import { ProjectFile } from '../../../types';
 import { PatchEngine } from '../patch/PatchEngine';
+import { WorkspaceIsolationValidator } from './WorkspaceIsolationValidator';
 
 export type EcosystemType = 'evm' | 'solana' | 'move' | 'generic';
 
@@ -503,9 +504,10 @@ This smart contract workspace is **CERTIFIED COMPILER READY** for deployment, au
     framework?: string
   ): { certifiedFiles: ProjectFile[]; report: ProjectValidationReport; validationMarkdown: string } {
     const ecosystem = this.detectEcosystem(files, blockchain, language, framework);
+    const isolatedFiles = WorkspaceIsolationValidator.validateAndClean(files, ecosystem);
 
     // 1. Initial Repair & Asset Generation
-    const repairResult = this.repairProject(files, projectName, ecosystem, framework, language);
+    const repairResult = this.repairProject(isolatedFiles, projectName, ecosystem, framework, language);
     let workingFiles = repairResult.repairedFiles;
 
     // 2. Execute Validation Checks

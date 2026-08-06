@@ -721,4 +721,31 @@ ${missingFeatures.map((mf, i) => `### Task ${i + 1}: Fulfill "${mf}"
     tempResult.certifiedFiles = certifiedFiles;
     return tempResult;
   }
+
+  /**
+   * Alias for certifyArchitecture
+   */
+  public static validate(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    prompt: string = '',
+    blockchain: string = 'Ethereum/EVM'
+  ): ArchitectureValidationResult {
+    if (!Array.isArray(files)) throw new Error("ArchitectureValidationEngine.validate: files must be an array");
+    const cert = this.certifyArchitecture(files, projectName, prompt, blockchain);
+    if (!cert || !cert.certifiedFiles) throw new Error("ArchitectureValidationEngine returned invalid result");
+    return cert;
+  }
+
+  /**
+   * Alias for certifyArchitecture
+   */
+  public static certify(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    prompt: string = '',
+    blockchain: string = 'Ethereum/EVM'
+  ): ArchitectureValidationResult {
+    return this.validate(files, projectName, prompt, blockchain);
+  }
 }

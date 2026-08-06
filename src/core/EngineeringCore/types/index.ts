@@ -1,4 +1,7 @@
 import { AuditResult } from '../../../types';
+import { ProjectProfile } from './ProjectProfile';
+
+export * from './ProjectProfile';
 
 export type UserIntent =
   | 'Create Project'
@@ -38,8 +41,17 @@ export interface ProjectRequirements {
   clarificationQuestions?: string[];
 }
 
+export type FileCategory = 'SMART_CONTRACT' | 'FRONTEND' | 'CONFIGURATION' | 'DOCUMENTATION' | 'ASSET';
+
+export interface ClassifiedFilePlan {
+  path: string;
+  category: FileCategory;
+  purpose?: string;
+}
+
 export interface ArchitecturePlan {
   folderStructure: string[];
+  classifiedFiles?: ClassifiedFilePlan[];
   contracts: Array<{ name: string; type: string; purpose: string }>;
   interfaces: Array<{ name: string; purpose: string }>;
   libraries: Array<{ name: string; purpose: string }>;
@@ -73,6 +85,7 @@ export interface PipelineContext {
   existingFiles?: Array<{ path: string; content: string; language: string }>;
   intent?: UserIntent;
   requirements?: ProjectRequirements;
+  projectProfile?: ProjectProfile;
   architecturePlan?: ArchitecturePlan;
   securityPlan?: SecurityPlan;
   systemPrompt?: string;
@@ -112,6 +125,7 @@ export interface StructuredProjectOutput {
   files: StructuredProjectFile[];
   audit?: AuditResult;
   requirements?: ProjectRequirements;
+  projectProfile?: ProjectProfile;
   architecture?: ArchitecturePlan;
   securityPlan?: SecurityPlan;
   reviewReport?: ReviewReport;

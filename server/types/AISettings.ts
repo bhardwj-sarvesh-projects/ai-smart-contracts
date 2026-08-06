@@ -1,7 +1,6 @@
 export type AIProvider =
   | "openai"
   | "groq"
-  | "gemini"
   | "anthropic"
   | "openrouter";
 

@@ -7,7 +7,7 @@
 import { isDummyOrEmptyKey } from "../providers/ProviderFactory";
 
 export const AI_CONFIG = {
-  provider: process.env.AI_PROVIDER || (process.env.GEMINI_API_KEY && !isDummyOrEmptyKey(process.env.GEMINI_API_KEY, "gemini") ? "gemini" : "openai"),
+  provider: process.env.AI_PROVIDER || (process.env.OPENROUTER_API_KEY && !isDummyOrEmptyKey(process.env.OPENROUTER_API_KEY, "openrouter") ? "openrouter" : "openai"),
 
   timeout: 60000,
 
@@ -22,9 +22,9 @@ export const AI_CONFIG = {
     baseURL: "https://api.groq.com/openai/v1",
   },
 
-  gemini: {
-    apiKey: process.env.GEMINI_API_KEY || "",
-    model: "gemini-3.5-flash",
+  openrouter: {
+    apiKey: process.env.OPENROUTER_API_KEY || "",
+    model: "google/gemini-2.5-pro",
   },
 };
 

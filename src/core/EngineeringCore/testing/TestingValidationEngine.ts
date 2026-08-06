@@ -910,4 +910,31 @@ contract ${cleanName}Test is Test {
 
     return tempResult;
   }
+
+  /**
+   * Alias for certifyTesting
+   */
+  public static validate(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    prompt: string = '',
+    blockchain: string = 'ethereum'
+  ) {
+    if (!Array.isArray(files)) throw new Error("TestingValidationEngine.validate: files must be an array");
+    const cert = this.certifyTesting(files, projectName, prompt, blockchain);
+    if (!cert || !cert.certifiedFiles) throw new Error("TestingValidationEngine returned invalid result");
+    return cert;
+  }
+
+  /**
+   * Alias for certifyTesting
+   */
+  public static certify(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    prompt: string = '',
+    blockchain: string = 'ethereum'
+  ) {
+    return this.validate(files, projectName, prompt, blockchain);
+  }
 }

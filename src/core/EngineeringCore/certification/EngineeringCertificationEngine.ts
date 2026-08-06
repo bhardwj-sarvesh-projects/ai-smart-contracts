@@ -1,5 +1,5 @@
 import { ProjectFile } from '../../../types';
-import * as crypto from 'crypto';
+import { sha256 } from '../utils/cryptoFallback';
 
 export interface GateStatus {
   name: string;
@@ -66,7 +66,10 @@ export interface EngineeringCertificationResult {
 export class EngineeringCertificationEngine {
 
   public static generateUuid(): string {
-    return 'CERT-' + crypto.randomBytes(8).toString('hex').toUpperCase();
+    const randomHex = Array.from({ length: 16 }, () =>
+      Math.floor(Math.random() * 16).toString(16)
+    ).join('').toUpperCase();
+    return 'CERT-' + randomHex;
   }
 
   /**
@@ -330,7 +333,7 @@ The **${projectName}** smart contract codebase has completed the full 12-Sprint 
     const reportFiles = files.filter(f => f.path.includes('report') || f.path.endsWith('.md')).map(f => f.path);
     const docFiles = files.filter(f => f.path.endsWith('.md')).map(f => f.path);
 
-    const computeSha256 = (content: string) => crypto.createHash('sha256').update(content || '', 'utf8').digest('hex');
+    const computeSha256 = (content: string) => sha256(content);
 
     const manifest = {
       certificationId: certData.certificationId,
@@ -468,6 +471,10 @@ ${certData.knownLimitations.map(l => `- ℹ️ ${l}`).join('\n')}
     blockchain: string,
     options?: { projectId?: string; customCertificationId?: string }
   ): EngineeringCertificationResult {
+    if (!files || !Array.isArray(files) || files.length === 0) {
+      throw new Error('WORKSPACE_INCOMPLETE: Workspace contains no project files.');
+    }
+
     const projectId = options?.projectId || `PROJ-${projectName.toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
     const certificationId = options?.customCertificationId || this.generateUuid();
     const timestamp = new Date().toISOString();
@@ -623,5 +630,32 @@ ${certData.knownLimitations.map(l => `- ℹ️ ${l}`).join('\n')}
       executiveSummary,
       issues
     };
+  }
+
+  /**
+   * Alias for certifyProject
+   */
+  public static certify(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    blockchain: string = 'ethereum',
+    prompt: string = ''
+  ) {
+    if (!Array.isArray(files)) throw new Error("EngineeringCertificationEngine.certify: files must be an array");
+    const cert = this.certifyProject(files, projectName, blockchain, prompt);
+    if (!cert || !cert.certifiedFiles) throw new Error("EngineeringCertificationEngine returned invalid result");
+    return cert;
+  }
+
+  /**
+   * Alias for certifyProject
+   */
+  public static finalizeCertification(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    blockchain: string = 'ethereum',
+    prompt: string = ''
+  ) {
+    return this.certify(files, projectName, blockchain, prompt);
   }
 }

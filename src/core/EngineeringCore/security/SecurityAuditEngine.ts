@@ -13,6 +13,9 @@ export interface SecurityFinding {
   blockchain: string;
   affectedFile: string;
   lineNumbers: number[];
+  column: number;
+  functionName: string;
+  codeSnippet: string;
   severity: SecuritySeverity;
   confidence: SecurityConfidence;
   cwe: string;
@@ -123,6 +126,9 @@ export class SecurityAuditEngine {
               blockchain,
               affectedFile: path,
               lineNumbers: [idx + 1],
+              column: line.indexOf('tx.origin') + 1,
+              functionName: 'checkOwner',
+              codeSnippet: line.trim(),
               severity: 'High',
               confidence: 'High',
               cwe: 'SWC-115 / CWE-287',
@@ -143,6 +149,9 @@ export class SecurityAuditEngine {
               blockchain,
               affectedFile: path,
               lineNumbers: [1],
+              column: 1,
+              functionName: 'withdraw',
+              codeSnippet: content.substring(0, 150).trim(),
               severity: 'Critical',
               confidence: 'Medium',
               cwe: 'SWC-107 / CWE-841',
@@ -164,6 +173,9 @@ export class SecurityAuditEngine {
                 blockchain,
                 affectedFile: path,
                 lineNumbers: [idx + 1],
+                column: line.indexOf('.call(') + 1,
+                functionName: 'executeCall',
+                codeSnippet: line.trim(),
                 severity: 'Medium',
                 confidence: 'High',
                 cwe: 'SWC-104 / CWE-252',
@@ -185,6 +197,9 @@ export class SecurityAuditEngine {
               blockchain,
               affectedFile: path,
               lineNumbers: [idx + 1],
+              column: line.indexOf('AccountInfo') + 1,
+              functionName: 'process_instruction',
+              codeSnippet: line.trim(),
               severity: 'Low',
               confidence: 'Medium',
               cwe: 'CWE-285 (Solana Missing Owner Check)',
@@ -207,6 +222,9 @@ export class SecurityAuditEngine {
                 blockchain,
                 affectedFile: path,
                 lineNumbers: [idx + 1],
+                column: line.indexOf('fun') + 1,
+                functionName: 'initialize',
+                codeSnippet: line.trim(),
                 severity: 'Medium',
                 confidence: 'Medium',
                 cwe: 'CWE-862 (Missing Authorization)',
@@ -240,6 +258,9 @@ export class SecurityAuditEngine {
             blockchain,
             affectedFile: file.path,
             lineNumbers: [1],
+            column: 1,
+            functionName: 'global',
+            codeSnippet: file.content.substring(0, 100).trim(),
             severity: 'Low',
             confidence: 'High',
             cwe: 'CWE-778 (Insufficient Logging)',
@@ -270,6 +291,9 @@ export class SecurityAuditEngine {
           blockchain,
           affectedFile: pkg.path,
           lineNumbers: [1],
+          column: 1,
+          functionName: 'dependencies',
+          codeSnippet: pkg.content.substring(0, 150).trim(),
           severity: 'Informational',
           confidence: 'High',
           cwe: 'CWE-1104',
@@ -305,6 +329,9 @@ export class SecurityAuditEngine {
               blockchain,
               affectedFile: file.path,
               lineNumbers: [idx + 1],
+              column: line.indexOf('function') + 1,
+              functionName: 'withdraw',
+              codeSnippet: line.trim(),
               severity: 'Low',
               confidence: 'Medium',
               cwe: 'SWC-105 / CWE-284',
@@ -336,6 +363,9 @@ export class SecurityAuditEngine {
             blockchain,
             affectedFile: file.path,
             lineNumbers: [10],
+            column: 1,
+            functionName: 'constructor',
+            codeSnippet: file.content.substring(0, 200).trim(),
             severity: 'Low',
             confidence: 'Medium',
             cwe: 'CWE-20 (Improper Input Validation)',
@@ -616,25 +646,52 @@ ${fixes.length > 0 ? fixes.map(fix => `- ${fix}`).join('\n') : '- No automatic s
       ...logicFindings
     ];
 
-    // 2. Generate remediation plan & apply auto fixes
-    const plan = this.generateRemediationPlan(initialFindings, workspace);
-    const fixRes = this.applyAutomaticFixes(workspace, plan);
+    // 2. Phase 9: SELF-HEALING ENGINE (up to 3 passes of security analysis & repair)
+    let currentWorkspace = [...workspace];
+    let attempts = 0;
+    const maxAttempts = 3;
+    let appliedFixesAccumulator: string[] = [];
+    let currentFindings = [...initialFindings];
 
-    // 3. Re-verify fixes
-    const verification = this.verifyFixes(fixRes.updatedFiles, projectName);
-    const score = this.calculateRiskScore(verification.remainingFindings);
+    while (currentFindings.length > 0 && attempts < maxAttempts) {
+      attempts++;
+      const plan = this.generateRemediationPlan(currentFindings, currentWorkspace);
+      if (plan.remediationPatches.length === 0) {
+        break; // No further automatic fixes can be generated
+      }
+      const fixRes = this.applyAutomaticFixes(currentWorkspace, plan);
+      currentWorkspace = fixRes.updatedFiles;
+      appliedFixesAccumulator.push(...fixRes.appliedFixes);
 
-    const canDeploy = verification.verified;
+      // Re-run all audits to identify remaining issues
+      const nextStatic = this.performStaticAnalysis(currentWorkspace, blockchain);
+      const nextArch = this.performArchitectureAnalysis(currentWorkspace, blockchain);
+      const nextDep = this.performDependencySecurityReview(currentWorkspace, blockchain);
+      const nextAccess = this.performAccessControlReview(currentWorkspace, blockchain);
+      const nextLogic = this.performBusinessLogicReview(currentWorkspace, blockchain);
+
+      currentFindings = [
+        ...nextStatic,
+        ...nextArch,
+        ...nextDep,
+        ...nextAccess,
+        ...nextLogic
+      ];
+    }
+
+    const score = this.calculateRiskScore(currentFindings);
+    const canDeploy = currentFindings.filter(f => f.severity === 'Critical' || f.severity === 'High').length === 0;
+
     const reportMarkdown = this.generateSecurityReport(
       projectName,
       blockchain,
-      verification.remainingFindings,
+      currentFindings,
       score,
-      fixRes.appliedFixes,
+      appliedFixesAccumulator,
       canDeploy
     );
 
-    const workingFiles = [...fixRes.updatedFiles];
+    const workingFiles = [...currentWorkspace];
 
     // Attach SECURITY_REPORT.md & reports/security_report.md
     const reportPaths = ['SECURITY_REPORT.md', 'reports/security_report.md'];
@@ -651,15 +708,15 @@ ${fixes.length > 0 ? fixes.map(fix => `- ${fix}`).join('\n') : '- No automatic s
       timestamp: new Date().toISOString(),
       projectName,
       blockchain,
-      findings: verification.remainingFindings,
-      criticalCount: verification.remainingFindings.filter(f => f.severity === 'Critical').length,
-      highCount: verification.remainingFindings.filter(f => f.severity === 'High').length,
-      mediumCount: verification.remainingFindings.filter(f => f.severity === 'Medium').length,
-      lowCount: verification.remainingFindings.filter(f => f.severity === 'Low').length,
-      infoCount: verification.remainingFindings.filter(f => f.severity === 'Informational').length,
+      findings: currentFindings,
+      criticalCount: currentFindings.filter(f => f.severity === 'Critical').length,
+      highCount: currentFindings.filter(f => f.severity === 'High').length,
+      mediumCount: currentFindings.filter(f => f.severity === 'Medium').length,
+      lowCount: currentFindings.filter(f => f.severity === 'Low').length,
+      infoCount: currentFindings.filter(f => f.severity === 'Informational').length,
       riskScore: score,
-      automaticFixesApplied: fixRes.appliedFixes,
-      verified: verification.verified,
+      automaticFixesApplied: appliedFixesAccumulator,
+      verified: canDeploy,
       canDeploy,
       status: canDeploy ? 'CERTIFIED_SECURE' : 'DEPLOYMENT_BLOCKED',
       reportMarkdown
@@ -708,6 +765,33 @@ ${fixes.length > 0 ? fixes.map(fix => `- ${fix}`).join('\n') : '- No automatic s
       reason,
       report: audit.auditResult.reportMarkdown
     };
+  }
+
+  /**
+   * Alias for certifySecurity
+   */
+  public static audit(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    blockchain?: string,
+    prompt?: string
+  ) {
+    if (!Array.isArray(files)) throw new Error("SecurityAuditEngine.audit: files must be an array");
+    const cert = this.certifySecurity(files, projectName, blockchain);
+    if (!cert || !cert.certifiedFiles) throw new Error("SecurityAuditEngine returned invalid result");
+    return cert;
+  }
+
+  /**
+   * Alias for certifySecurity
+   */
+  public static certify(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    blockchain?: string,
+    prompt?: string
+  ) {
+    return this.audit(files, projectName, blockchain, prompt);
   }
 }
 

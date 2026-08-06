@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Folder, FileCode, Plus, Trash2, ChevronRight, ChevronDown, Zap, Search, Edit2, Copy, FolderPlus, FilePlus } from 'lucide-react';
 import { ProjectFile } from '../types';
+import { BackgroundTasksWidget } from './BackgroundTasksWidget';
 
 interface FileTreeProps {
   files: ProjectFile[];
@@ -377,6 +378,11 @@ export default function FileTreeComponent({
       {/* Tree Content */}
       <div className="flex-1 overflow-y-auto p-1 font-mono text-xs scrollbar-thin">
         {renderTree(treeStructure)}
+      </div>
+
+      {/* Background Tasks Sidebar Widget */}
+      <div className="p-2 border-t border-slate-800/80 bg-slate-950/40">
+        <BackgroundTasksWidget theme={theme} compact={true} />
       </div>
 
       {/* Sidebar Deploy Button */}

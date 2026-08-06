@@ -6,6 +6,8 @@ export type CompilerType =
   | 'forge'
   | 'hardhat'
   | 'anchor'
+  | 'solang'
+  | 'scarb'
   | 'cargo-build-bpf'
   | 'cargo-build'
   | 'aptos-move'
@@ -68,14 +70,27 @@ export class CompilerEngine {
    * Detect compiler required for the workspace
    */
   public static detectCompiler(
-    files: ProjectFile[],
+    files: ProjectFile[] | string = [],
     blockchain?: string,
     framework?: string
   ): CompilerType {
+    if (typeof files === 'string') {
+      const tempFw = blockchain;
+      blockchain = files;
+      framework = tempFw;
+      files = [];
+    }
+    const fileList = Array.isArray(files) ? files : [];
     const b = (blockchain || '').toLowerCase();
     const f = (framework || '').toLowerCase();
 
-    if (b.includes('solana') || f.includes('anchor')) {
+    if (f === 'solang' || b.includes('solang')) {
+      return 'solang';
+    }
+    if (f === 'scarb' || b.includes('starknet') || b.includes('scarb')) {
+      return 'scarb';
+    }
+    if (f.includes('anchor') || (b.includes('solana') && !f.includes('solang'))) {
       return 'anchor';
     }
     if (b.includes('aptos')) {
@@ -92,7 +107,7 @@ export class CompilerEngine {
     }
 
     // Inspect files
-    const paths = files.map(file => PatchEngine.normalizePath(file.path).toLowerCase());
+    const paths = fileList.map(file => PatchEngine.normalizePath(file.path).toLowerCase());
     if (paths.some(p => p.includes('anchor.toml'))) return 'anchor';
     if (paths.some(p => p.includes('foundry.toml'))) return 'forge';
     if (paths.some(p => p.includes('hardhat.config'))) return 'hardhat';
@@ -609,5 +624,34 @@ ${modifiedFiles.length > 0 ? modifiedFiles.map(f => `- \`${f}\``).join('\n') : '
       certifiedFiles: currentFiles,
       result
     };
+  }
+
+  /**
+   * Alias for certifyCompilation
+   */
+  public static compile(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    blockchain?: string,
+    framework?: string,
+    language?: string
+  ) {
+    if (!Array.isArray(files)) throw new Error("CompilerEngine.compile: files must be an array");
+    const cert = this.certifyCompilation(files, projectName, blockchain, framework, language);
+    if (!cert || !cert.certifiedFiles) throw new Error("CompilerEngine returned invalid result");
+    return cert;
+  }
+
+  /**
+   * Alias for certifyCompilation
+   */
+  public static certify(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    blockchain?: string,
+    framework?: string,
+    language?: string
+  ) {
+    return this.compile(files, projectName, blockchain, framework, language);
   }
 }

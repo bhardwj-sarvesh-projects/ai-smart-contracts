@@ -206,7 +206,7 @@ export default function SettingsModal({ isOpen, onClose, currentUser, onSettings
               {[
                 { id: 'openai', name: 'OpenAI', desc: 'GPT Series' },
                 { id: 'groq', name: 'GroqCloud', desc: 'Ultra-low Latency' },
-                { id: 'gemini', name: 'Gemini', desc: 'Google Advanced' }
+                { id: 'openrouter', name: 'OpenRouter', desc: 'Unified AI Gateway' }
               ].map((p) => (
                 <button
                   id={`provider-btn-${p.id}`}
@@ -242,7 +242,7 @@ export default function SettingsModal({ isOpen, onClose, currentUser, onSettings
                 type={showKey ? 'text' : 'password'}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={apiKey ? "••••••••" : `Enter your ${provider.toUpperCase()} API key...`}
+                placeholder={apiKey ? "••••••••" : provider === 'openrouter' ? 'OpenRouter API Key (e.g. sk-or-v1-********************************)' : `Enter your ${provider.toUpperCase()} API key...`}
                 className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none transition pr-10 font-mono ${
                   isDark
                     ? 'bg-slate-900 border-slate-800 hover:border-slate-700 focus:border-indigo-500 text-slate-100 placeholder-slate-600'

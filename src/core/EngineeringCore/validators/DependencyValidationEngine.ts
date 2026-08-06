@@ -431,4 +431,33 @@ ${repairs.length > 0 ? repairs.map(r => `- ${r}`).join('\n') : '- Toolchain conf
       result
     };
   }
+
+  /**
+   * Alias for validateAndCertifyToolchain
+   */
+  public static validate(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    inputBlockchain?: string,
+    inputFramework?: string,
+    inputLanguage?: string
+  ) {
+    if (!Array.isArray(files)) throw new Error("DependencyValidationEngine.validate: files must be an array");
+    const cert = this.validateAndCertifyToolchain(files, projectName, inputBlockchain, inputFramework, inputLanguage);
+    if (!cert || !cert.certifiedFiles) throw new Error("DependencyValidationEngine returned invalid result");
+    return cert;
+  }
+
+  /**
+   * Alias for validateAndCertifyToolchain
+   */
+  public static certify(
+    files: ProjectFile[],
+    projectName: string = 'SmartContractProject',
+    inputBlockchain?: string,
+    inputFramework?: string,
+    inputLanguage?: string
+  ) {
+    return this.validate(files, projectName, inputBlockchain, inputFramework, inputLanguage);
+  }
 }
