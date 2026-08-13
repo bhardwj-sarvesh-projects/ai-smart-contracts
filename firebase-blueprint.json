@@ -23,7 +23,7 @@
         },
         "provider": {
           "type": "string",
-          "description": "Active AI provider (openai, groq, gemini, openrouter, anthropic, azure, etc.)"
+          "description": "Active AI provider (openai, groq)"
         },
         "apiKey": {
           "type": "string",

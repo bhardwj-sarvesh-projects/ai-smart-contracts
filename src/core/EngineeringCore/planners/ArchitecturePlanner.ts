@@ -127,8 +127,10 @@ export class ArchitecturePlanner {
       throw new Error(`UNSUPPORTED_PROJECT_PROFILE: Combination (Blockchain="${rawChain}", Language="${rawLang}", Framework="${rawFw}") is unsupported.`);
     }
 
-    const pName = req.contractType ? req.contractType.toLowerCase().replace(/\s+/g, '_') : 'my_contract';
-    const pNamePascal = req.contractType ? req.contractType.replace(/\s+/g, '') : 'MyContract';
+    const rawContractType = req.contractType || 'SmartContract';
+    const cleanPascal = rawContractType.replace(/[^a-zA-Z0-9]/g, '');
+    const pNamePascal = cleanPascal ? cleanPascal.charAt(0).toUpperCase() + cleanPascal.slice(1) : 'SmartContract';
+    const pName = pNamePascal.toLowerCase();
 
     let directoryLayout: string[] = [];
 
@@ -283,9 +285,15 @@ export class ArchitecturePlanner {
         lower.includes('programs/') ||
         lower.includes('lib.rs') ||
         lower.includes('anchor.toml') ||
+        lower.includes('solang.toml') ||
+        lower.includes('cargo.toml') ||
+        lower.includes('cargo.lock') ||
         lower.includes('move.toml') ||
         lower.includes('sources/') ||
-        lower.includes('scarb.toml')
+        lower.includes('scarb.toml') ||
+        lower.endsWith('.rs') ||
+        lower.endsWith('.move') ||
+        lower.endsWith('.cairo')
       ) {
         throw new Error(`PROJECT_PROFILE_MISMATCH: Generated file "${filePath}" violates ProjectProfile (Blockchain: "${profile.blockchain}", Language: "${profile.language}", Framework: "${profile.framework}")`);
       }

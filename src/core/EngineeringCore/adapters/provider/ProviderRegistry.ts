@@ -12,24 +12,11 @@ export class OpenAIAdapter implements ProviderAdapter {
   supportedModels = ['gpt-4o', 'gpt-4o-mini', 'o1-preview', 'o3-mini'];
 }
 
-export class OpenRouterAdapter implements ProviderAdapter {
-  id = 'openrouter';
-  name = 'OpenRouter';
-  defaultModel = 'google/gemini-2.5-pro';
-  supportedModels = [
-    'anthropic/claude-sonnet-4',
-    'anthropic/claude-opus-4.1',
-    'openai/gpt-5',
-    'openai/gpt-5-mini',
-    'google/gemini-2.5-pro',
-    'google/gemini-2.5-flash',
-    'deepseek/deepseek-r1',
-    'deepseek/deepseek-v3',
-    'meta-llama/llama-4-maverick',
-    'qwen/qwen3-coder',
-    'mistralai/mistral-large',
-    'x-ai/grok-4'
-  ];
+export class GeminiAdapter implements ProviderAdapter {
+  id = 'gemini';
+  name = 'Google Gemini';
+  defaultModel = 'gemini-2.5-flash';
+  supportedModels = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-pro'];
 }
 
 export class GroqAdapter implements ProviderAdapter {
@@ -52,14 +39,13 @@ export class ProviderRegistry {
   static initialize() {
     if (this.adapters.size > 0) return;
     this.adapters.set('openai', new OpenAIAdapter());
-    this.adapters.set('openrouter', new OpenRouterAdapter());
     this.adapters.set('groq', new GroqAdapter());
     this.adapters.set('anthropic', new AnthropicAdapter());
   }
 
   static getAdapter(id: string): ProviderAdapter {
     this.initialize();
-    const normalized = (id || 'openrouter').toLowerCase().trim();
-    return this.adapters.get(normalized) || this.adapters.get('openrouter')!;
+    const normalized = (id || 'openai').toLowerCase().trim();
+    return this.adapters.get(normalized) || this.adapters.get('openai')!;
   }
 }

@@ -2,6 +2,10 @@ import { StructuredProjectOutput, ProjectProfile } from '../types';
 import { ProjectFile } from '../../../types';
 import { CategoryClassifier } from '../validators/CategoryClassifier';
 import { MarkdownFenceStripper } from './MarkdownFenceStripper';
+import { WhitespaceNormalizer } from './WhitespaceNormalizer';
+import { UnicodeNormalizer } from './UnicodeNormalizer';
+import { LanguageExtractor } from './LanguageExtractor';
+import { LanguageRepairEngine } from './LanguageRepairEngine';
 import { SmartContractValidator } from '../validators/SmartContractValidator';
 import { FrontendValidator } from '../validators/FrontendValidator';
 import { ConfigurationValidator } from '../validators/ConfigurationValidator';
@@ -11,79 +15,64 @@ import { ArchitecturePlanner } from '../planners/ArchitecturePlanner';
 
 export class ResponseParser {
   /**
-   * Extracts clean source code from raw LLM output, removing any markdown code fences.
+   * Extracts clean source code from raw LLM output, applying full normalization pipeline.
    */
   static extractSource(rawResponse: string, path?: string): string {
-    return MarkdownFenceStripper.strip(rawResponse, path);
+    if (!path) {
+      return LanguageExtractor.extractAndNormalize(rawResponse, 'code.txt');
+    }
+    const extracted = LanguageExtractor.extractAndNormalize(rawResponse, path);
+    return LanguageRepairEngine.repair(path, extracted);
   }
 
   /**
    * Validates the source code for a specific file path and language using category-aware dispatch.
-   * Strips markdown fences before validation.
+   * Normalizes, extracts, repairs, and validates.
    */
   static validateSource(path: string, content: string, language: string, profile?: ProjectProfile): ProjectFile {
     if (profile) {
       ArchitecturePlanner.validateProfileFileMismatch(profile, path);
     }
-    const strippedContent = MarkdownFenceStripper.strip(content, path);
+
+    // Normalization & Repair Pipeline
+    let processed = LanguageExtractor.extractAndNormalize(content, path);
+    processed = LanguageRepairEngine.repair(path, processed);
+
     const category = CategoryClassifier.classify(path);
 
     switch (category) {
       case 'SMART_CONTRACT':
-        return SmartContractValidator.validate(path, strippedContent, language);
+        return SmartContractValidator.validate(path, processed, language);
       case 'FRONTEND':
-        return FrontendValidator.validate(path, strippedContent, language);
+        return FrontendValidator.validate(path, processed, language);
       case 'CONFIGURATION':
-        return ConfigurationValidator.validate(path, strippedContent, language);
+        return ConfigurationValidator.validate(path, processed, language);
       case 'DOCUMENTATION':
-        return DocumentationValidator.validate(path, strippedContent, language);
+        return DocumentationValidator.validate(path, processed, language);
       case 'ASSET':
-        return AssetValidator.validate(path, strippedContent, language);
+        return AssetValidator.validate(path, processed, language);
       default:
-        return ConfigurationValidator.validate(path, strippedContent, language);
+        return ConfigurationValidator.validate(path, processed, language);
     }
   }
 
   /**
-   * Backward-compatible parse method if needed for other code layers.
+   * Legacy V1 JSON project parsing is decommissioned in Generation Pipeline V2.
+   * UniversalPipeline uses Planner-owned single-file incremental generation.
    */
   static parseAndNormalize(rawResponse: string, fallbackName: string = 'Smart Contract Workspace'): StructuredProjectOutput {
-    // Return a structured schema placeholder, but standard operations should use direct extraction
-    try {
-      const cleaned = rawResponse.trim();
-      if (cleaned.startsWith('{')) {
-        const parsed = JSON.parse(cleaned);
-        const proj = parsed.project || parsed;
-        const files: ProjectFile[] = (proj.files || []).map((f: any) => {
-          const p = String(f.path || '').trim();
-          const c = String(f.content || '').trim();
-          const l = String(f.language || '').trim();
-          return ResponseParser.validateSource(p, c, l);
-        });
-
-        return {
-          name: String(proj.name || fallbackName),
-          description: String(proj.description || 'Production-ready project'),
-          blockchain: String(proj.blockchain || proj.ecosystem || 'ethereum').toLowerCase(),
-          language: String(proj.language || 'solidity').toLowerCase(),
-          framework: String(proj.framework || 'foundry').toLowerCase(),
-          contractType: String(proj.name || fallbackName),
-          files
-        };
-      }
-    } catch (e) {
-      // Suppress and fallback
-    }
-
-    // Default basic structure
+    // Pipeline V2: Standard operation uses direct single-file extraction via extractSource / validateSource.
+    const sourceContent = MarkdownFenceStripper.strip(rawResponse);
     return {
       name: fallbackName,
-      description: 'Production-ready project',
+      description: 'Production-ready project (Pipeline V2)',
       blockchain: 'ethereum',
       language: 'solidity',
       framework: 'foundry',
       contractType: fallbackName,
-      files: []
+      files: [
+        ResponseParser.validateSource('contracts/Contract.sol', sourceContent, 'solidity')
+      ]
     };
   }
 }

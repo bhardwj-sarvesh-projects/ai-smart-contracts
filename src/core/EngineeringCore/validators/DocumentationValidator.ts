@@ -22,6 +22,10 @@ export class DocumentationValidator {
       throw new Error(`INVALID_AI_RESPONSE: Markdown file ${path} does not contain valid markdown formatting`);
     }
 
+    if (trimmedContent.includes('pragma solidity') && !trimmedContent.includes('#') && !trimmedContent.includes('```')) {
+      throw new Error(`INVALID_AI_RESPONSE: Markdown file ${path} contains raw Solidity code instead of Markdown`);
+    }
+
     return {
       path: normalizedPath,
       content: trimmedContent,

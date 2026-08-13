@@ -49,16 +49,27 @@ export class RequirementAnalyzer {
     }
 
     // Contract Type detection
-    let contractType = 'ERC-20 Token';
-    if (lower.includes('nft') || lower.includes('erc721') || lower.includes('erc-721')) contractType = 'NFT Collection (ERC-721)';
-    else if (lower.includes('multi-token') || lower.includes('erc1155') || lower.includes('erc-1155')) contractType = 'Multi-Token (ERC-1155)';
-    else if (lower.includes('vault') || lower.includes('erc4626') || lower.includes('yield')) contractType = 'Yield Vault (ERC-4626)';
-    else if (lower.includes('staking') || lower.includes('reward')) contractType = 'Staking & Rewards Protocol';
-    else if (lower.includes('dex') || lower.includes('amm') || lower.includes('swap') || lower.includes('liquidity')) contractType = 'DEX / Automated Market Maker';
-    else if (lower.includes('dao') || lower.includes('governance') || lower.includes('governor')) contractType = 'DAO Governance Protocol';
-    else if (lower.includes('marketplace') || lower.includes('auction')) contractType = 'Decentralized Marketplace';
-    else if (lower.includes('lending') || lower.includes('borrow')) contractType = 'Lending & Borrowing Protocol';
-    else if (lower.includes('bridge') || lower.includes('cross-chain') || lower.includes('layerzero')) contractType = 'Cross-Chain Messaging Protocol';
+    let contractType = '';
+    const contractMatch = prompt.match(/(?:contract|class|module|program)\s+([A-Za-z0-9_]+)/i) ||
+                          prompt.match(/([A-Z][a-zA-Z0-9]+)\s+(?:contract|protocol|token|vault)/i);
+
+    if (contractMatch && contractMatch[1] && contractMatch[1].length > 2) {
+      contractType = contractMatch[1];
+    } else if (lower.includes('nft') || lower.includes('erc721') || lower.includes('erc-721')) contractType = 'NFTCollection';
+    else if (lower.includes('multi-token') || lower.includes('erc1155') || lower.includes('erc-1155')) contractType = 'MultiToken';
+    else if (lower.includes('vault') || lower.includes('erc4626') || lower.includes('yield')) contractType = 'YieldVault';
+    else if (lower.includes('staking') || lower.includes('reward')) contractType = 'StakingProtocol';
+    else if (lower.includes('dex') || lower.includes('amm') || lower.includes('swap') || lower.includes('liquidity')) contractType = 'DEXProtocol';
+    else if (lower.includes('dao') || lower.includes('governance') || lower.includes('governor')) contractType = 'DAOGovernance';
+    else if (lower.includes('marketplace') || lower.includes('auction')) contractType = 'Marketplace';
+    else if (lower.includes('lending') || lower.includes('borrow')) contractType = 'LendingProtocol';
+    else if (lower.includes('bridge') || lower.includes('cross-chain') || lower.includes('layerzero')) contractType = 'CrossChainBridge';
+    else if (lower.includes('erc20') || lower.includes('erc-20') || lower.includes('token')) contractType = 'ERC20Token';
+    else {
+      const cleanPrompt = prompt.replace(/[^a-zA-Z0-9]/g, ' ').trim();
+      const words = cleanPrompt.split(/\s+/).filter(w => w.length > 2);
+      contractType = words.length > 0 ? words[0].charAt(0).toUpperCase() + words[0].slice(1) : 'SmartContract';
+    }
 
     // Security requirements
     const securityRequirements: string[] = ['Reentrancy Protection', 'Input Sanitization', 'Custom Errors'];

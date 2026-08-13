@@ -1,5 +1,6 @@
 import OpenAI from "openai";
-import { AIProvider, AIResponse, HealthResponse } from "./AIProvider";
+import { AIProvider, AIResponse, HealthResponse, RequestOptions } from "./AIProvider";
+import { TokenBudgetEngine } from "../../src/core/EngineeringCore/runtime/TokenBudgetEngine";
 
 export class OpenAIProvider implements AIProvider {
   readonly name = "openai";
@@ -24,8 +25,9 @@ export class OpenAIProvider implements AIProvider {
     systemInstruction: string = "",
     responseMimeType: string = "text/plain",
     route: string = "unknown",
-    retries: number = 3,
-    baseDelayMs: number = 1000
+    retries: number = 2,
+    baseDelayMs: number = 500,
+    options?: RequestOptions
   ): Promise<AIResponse> {
     const startTime = Date.now();
     let lastError: any = null;
@@ -35,12 +37,32 @@ export class OpenAIProvider implements AIProvider {
       sys = sys ? `${sys}\nYou MUST respond with valid JSON.` : "You MUST respond with valid JSON.";
     }
 
+    const targetPath = options?.targetPath;
+    const fileLimit = targetPath ? TokenBudgetEngine.getFileTypeMaxTokens(targetPath) : 2000;
+    const requestedTokens = typeof options?.maxTokens === 'number' ? options.maxTokens : this.maxTokens;
+    let finalMaxTokens = Math.min(requestedTokens, fileLimit);
+
+    if (targetPath) {
+      TokenBudgetEngine.assertTokenBudget(targetPath, finalMaxTokens);
+    }
+
+    const tpmCheck = TokenBudgetEngine.checkAndClampTPMBudget(
+      "openai",
+      targetPath || '',
+      finalMaxTokens,
+      prompt.length + sys.length
+    );
+
+    finalMaxTokens = tpmCheck.safeMaxTokens;
+
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         console.log("--------------------------------");
         console.log("OPENAI REQUEST");
         console.log(`Model: ${this.model}`);
         console.log(`Route: ${route}`);
+        console.log(`Target File: ${targetPath || "N/A"}`);
+        console.log(`Max Tokens: ${finalMaxTokens}`);
         console.log(`Prompt Length: ${prompt.length + sys.length}`);
         console.log("--------------------------------");
 
@@ -54,7 +76,7 @@ export class OpenAIProvider implements AIProvider {
             ],
             response_format: responseMimeType === "application/json" ? { type: "json_object" } : undefined,
             temperature: this.temperature,
-            max_tokens: this.maxTokens,
+            max_tokens: finalMaxTokens,
           });
         } catch (rfErr: any) {
           if (responseMimeType === "application/json" && (rfErr.status === 400 || (rfErr.message && rfErr.message.toLowerCase().includes("response_format")))) {
@@ -66,7 +88,7 @@ export class OpenAIProvider implements AIProvider {
                 { role: "user" as const, content: prompt }
               ],
               temperature: this.temperature,
-              max_tokens: this.maxTokens,
+              max_tokens: finalMaxTokens,
             });
           } else {
             throw rfErr;
@@ -79,6 +101,8 @@ export class OpenAIProvider implements AIProvider {
         const promptTokens = response.usage?.prompt_tokens ?? 0;
         const completionTokens = response.usage?.completion_tokens ?? 0;
         const totalTokens = response.usage?.total_tokens ?? 0;
+
+        TokenBudgetEngine.updateTPMUsageSuccess("openai", totalTokens);
 
         console.log(`Prompt Tokens: ${promptTokens}`);
         console.log(`Completion Tokens: ${completionTokens}`);
@@ -103,25 +127,36 @@ export class OpenAIProvider implements AIProvider {
         console.error("Full OpenAI error:", err);
         console.error("HTTP status:", err.status || "N/A");
         console.error("Error code:", err.code || "N/A");
-        console.error("Stack trace:", err.stack || "N/A");
         console.error("--------------------------------");
 
-        console.warn(`[OPENAI PROVIDER] Attempt ${attempt} failed:`, err.message || err);
+        const msg = (err.message || String(err)).toLowerCase();
+        const isRateLimit = err.status === 429 || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate exceeded") || msg.includes("rate_limit_exceeded") || msg.includes("too many requests") || msg.includes("tpd") || msg.includes("tpm") || msg.includes("rpm") || msg.includes("quota exceeded") || msg.includes("insufficient quota") || msg.includes("insufficient credits");
+        const isAuth = err.status === 401 || err.status === 403 || err.status === 402 || msg.includes("401") || msg.includes("403") || msg.includes("402") || msg.includes("invalid_api_key") || msg.includes("unauthorized");
 
-        const isAuthErr = err.status === 401 || err.status === 403 ||
-          (err.message && (
-            err.message.includes("401") ||
-            err.message.includes("403") ||
-            err.message.toLowerCase().includes("invalid_api_key") ||
-            err.message.toLowerCase().includes("incorrect api key") ||
-            err.message.toLowerCase().includes("unauthorized") ||
-            err.message.toLowerCase().includes("authenticationerror")
-          ));
-
-        if (isAuthErr) {
-          console.warn(`[OPENAI PROVIDER] Authentication error detected (401/403). Fast-failing attempt ${attempt} without retries.`);
-          err.isAuthError = true;
-          throw err;
+        if (isRateLimit || isAuth) {
+          if (isRateLimit) {
+            TokenBudgetEngine.updateTPMUsageFromError("openai", err.message || String(err));
+          }
+          const parsedRetryAfter = TokenBudgetEngine.extractRetryAfter(err.message || String(err), err.headers);
+          const code = isRateLimit ? "RATE_LIMIT_ERROR" : "AUTH_ERROR";
+          const status = err.status || (isRateLimit ? 429 : 401);
+          const structuredErr = new Error(JSON.stringify({
+            code,
+            errorCode: code,
+            stage: "AI Generation",
+            engine: "OpenAIProvider",
+            provider: "openai",
+            model: this.model,
+            statusCode: status,
+            message: err.message || String(err),
+            retryable: false,
+            retryAfter: parsedRetryAfter
+          }));
+          (structuredErr as any).isTerminal = true;
+          (structuredErr as any).code = code;
+          (structuredErr as any).status = status;
+          (structuredErr as any).isAuthError = isAuth;
+          throw structuredErr;
         }
 
         if (attempt < retries) {
@@ -134,24 +169,24 @@ export class OpenAIProvider implements AIProvider {
     throw lastError;
   }
 
-  async generate(prompt: string, systemInstruction?: string, responseMimeType?: string): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, responseMimeType || "application/json", "/api/generate");
+  async generate(prompt: string, systemInstruction?: string, responseMimeType?: string, options?: RequestOptions): Promise<AIResponse> {
+    return this.executeWithRetry(prompt, systemInstruction, responseMimeType || "text/plain", "/api/generate", 2, 500, options);
   }
 
-  async edit(prompt: string, systemInstruction?: string): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/edit");
+  async edit(prompt: string, systemInstruction?: string, options?: RequestOptions): Promise<AIResponse> {
+    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/edit", 2, 500, options);
   }
 
-  async audit(prompt: string, systemInstruction?: string): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/audit");
+  async audit(prompt: string, systemInstruction?: string, options?: RequestOptions): Promise<AIResponse> {
+    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/audit", 2, 500, options);
   }
 
-  async plan(prompt: string, systemInstruction?: string): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/generate-plan");
+  async plan(prompt: string, systemInstruction?: string, options?: RequestOptions): Promise<AIResponse> {
+    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/generate-plan", 2, 500, options);
   }
 
-  async compileAnalysis(prompt: string, systemInstruction?: string): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/compile");
+  async compileAnalysis(prompt: string, systemInstruction?: string, options?: RequestOptions): Promise<AIResponse> {
+    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/compile", 2, 500, options);
   }
 
   async healthCheck(): Promise<HealthResponse> {

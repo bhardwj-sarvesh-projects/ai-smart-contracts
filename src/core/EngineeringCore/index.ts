@@ -1,6 +1,7 @@
 export * from './types';
 export * from './EngineeringCore';
 export * from './pipeline/UniversalPipeline';
+export * from './pipeline/AuthoritativePipelineRouter';
 export * from './analyzers/IntentAnalyzer';
 export * from './analyzers/RequirementAnalyzer';
 export * from './planners/ArchitecturePlanner';
@@ -8,6 +9,7 @@ export * from './planners/SecurityPlanner';
 export * from './knowledge/KnowledgeEngine';
 export * from './prompts/EnterprisePromptBuilder';
 export * from './parsers/ResponseParser';
+export * from './parsers/ResponseClassifier';
 export * from './validators/Validator';
 export * from './validators/ProjectIntegrityEngine';
 export * from './validators/DependencyValidationEngine';

@@ -439,8 +439,28 @@ export default function App() {
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || errData.message || 'AI Plan generation failed');
+        const text = await response.text();
+        let errData;
+        try {
+          errData = JSON.parse(text);
+        } catch {
+          errData = {
+            success: false,
+            error: {
+              code: "API_ERROR",
+              errorCode: "API_ERROR",
+              stage: "AI Generation",
+              engine: "AIService",
+              provider: activeProvider,
+              model: activeModel,
+              statusCode: response.status,
+              message: text || 'AI Plan generation failed',
+              retryable: false
+            }
+          };
+        }
+        const errorObj = errData.error || errData;
+        throw new Error(typeof errorObj === 'string' ? errorObj : JSON.stringify(errorObj));
       }
 
       const planData = await response.json();

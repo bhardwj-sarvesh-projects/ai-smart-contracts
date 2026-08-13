@@ -1,6 +1,6 @@
 # AI Contracts v1.0 - RELIABILITY_REPORT.md
 
-**Generated At**: 2026-07-30T08:52:58.066Z
+**Generated At**: 2026-08-12T05:44:18.810Z
 **Target Release**: AI Contracts v1.0 RC4
 
 ---
@@ -38,10 +38,10 @@
 
 | Ecosystem | Total Tested | Pass Rate % | Avg Runtime (s) | Certification Pass % |
 | :--- | :---: | :---: | :---: | :---: |
-| **Ethereum/EVM** | 120 | 100% | 0.01s | 100% |
-| **Solana** | 40 | 100% | 0.01s | 100% |
-| **Aptos** | 32 | 100% | 0.01s | 100% |
-| **Sui** | 32 | 100% | 0.01s | 100% |
+| **Ethereum/EVM** | 120 | 100% | 0.1s | 100% |
+| **Solana** | 40 | 100% | 0.05s | 100% |
+| **Aptos** | 32 | 100% | 0.05s | 100% |
+| **Sui** | 32 | 100% | 0.05s | 100% |
 
 ---
 

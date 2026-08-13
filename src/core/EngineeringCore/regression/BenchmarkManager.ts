@@ -14,6 +14,7 @@ export interface BenchmarkDefinition {
   sampleCode: ProjectFile[];
   expectedArtifacts: string[];
   complexity: 'Simple' | 'Intermediate' | 'Complex' | 'Enterprise';
+  mode?: 'LIVE_GENERATION' | 'STATIC_FIXTURE';
 }
 
 export class BenchmarkManager {

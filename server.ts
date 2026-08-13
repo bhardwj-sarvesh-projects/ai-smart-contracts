@@ -11,6 +11,7 @@ import settingsRouter from "./server/routes/settings";
 import { PatchEngine } from "./src/core/EngineeringCore/patch/PatchEngine";
 import { ProjectIntegrityEngine } from "./src/core/EngineeringCore/validators/ProjectIntegrityEngine";
 import { SecurityAuditEngine } from "./src/core/EngineeringCore/security/SecurityAuditEngine";
+import { CompilerEngine } from "./src/core/EngineeringCore/compiler/CompilerEngine";
 
 dotenv.config();
 
@@ -29,27 +30,27 @@ function getActiveUserConfig(req: express.Request): UserConfig {
   let userConfig = userId ? SettingsService.getDecrypted(userId) : null;
 
   if (!userConfig) {
-    let activeProvider = AI_CONFIG.provider || "openrouter";
+    let activeProvider = AI_CONFIG.provider || "openai";
     let activeKey = "";
     let activeModel = "";
 
     if (activeProvider === "openai") {
       activeKey = AI_CONFIG.openai.apiKey;
-      activeModel = AI_CONFIG.openai.model;
+      activeModel = AI_CONFIG.openai.model || "gpt-4o-mini";
     } else if (activeProvider === "groq") {
       activeKey = AI_CONFIG.groq.apiKey;
-      activeModel = AI_CONFIG.groq.model;
-    } else if (activeProvider === "openrouter") {
-      activeKey = AI_CONFIG.openrouter.apiKey;
-      activeModel = AI_CONFIG.openrouter.model || "google/gemini-2.5-pro";
+      activeModel = AI_CONFIG.groq.model || "llama-3.3-70b-versatile";
     }
 
-    // Check if activeProvider key is missing or dummy, and fallback to OpenRouter if available
     if (isDummyOrEmptyKey(activeKey, activeProvider)) {
-      if (process.env.OPENROUTER_API_KEY && !isDummyOrEmptyKey(process.env.OPENROUTER_API_KEY, "openrouter")) {
-        activeProvider = "openrouter";
-        activeKey = process.env.OPENROUTER_API_KEY;
-        activeModel = "google/gemini-2.5-pro";
+      if (process.env.OPENAI_API_KEY && !isDummyOrEmptyKey(process.env.OPENAI_API_KEY, "openai")) {
+        activeProvider = "openai";
+        activeKey = process.env.OPENAI_API_KEY;
+        activeModel = "gpt-4o-mini";
+      } else if (process.env.GROQ_API_KEY && !isDummyOrEmptyKey(process.env.GROQ_API_KEY, "groq")) {
+        activeProvider = "groq";
+        activeKey = process.env.GROQ_API_KEY;
+        activeModel = "llama-3.3-70b-versatile";
       }
     }
 
@@ -60,7 +61,7 @@ function getActiveUserConfig(req: express.Request): UserConfig {
       photo: photo || "",
       provider: activeProvider,
       apiKey: activeKey,
-      defaultModel: activeModel || "google/gemini-2.5-pro",
+      defaultModel: activeModel || "gpt-4o-mini",
       temperature: 0.2,
       maxTokens: 2000,
       createdDate: new Date().toISOString(),
@@ -251,6 +252,91 @@ app.delete("/api/projects/:id", (req, res) => {
   res.json({ success: true, message: "Workspace and all associated versions, audit reports, history and metadata deleted permanently." });
 });
 
+// Centralized API Error Normalizer Helper
+function sendStructuredError(res: express.Response, err: any, providerName = "openai", modelName = "gpt-4o-mini") {
+  console.error("[SERVER ERROR]", err);
+  let statusCode = 500;
+  let code = "API_ERROR";
+  let message = "An error occurred during AI processing.";
+  let provider = providerName;
+  let model = modelName;
+  let retryable = false;
+  let retryAfter: string | null = null;
+
+  try {
+    const rawMsg = err.message || String(err);
+    if (rawMsg.startsWith("{") && rawMsg.endsWith("}")) {
+      const parsed = JSON.parse(rawMsg);
+      if (parsed.code) code = parsed.code;
+      if (parsed.statusCode) statusCode = Number(parsed.statusCode);
+      if (parsed.message) message = parsed.message;
+      if (parsed.provider) provider = parsed.provider || providerName;
+      if (parsed.model) model = parsed.model || modelName;
+      if (parsed.retryable !== undefined) retryable = parsed.retryable;
+      if (parsed.retryAfter) retryAfter = parsed.retryAfter;
+    } else {
+      const lower = rawMsg.toLowerCase();
+      if (err.status === 429 || err.statusCode === 429 || lower.includes("429") || lower.includes("rate limit") || lower.includes("rate exceeded") || lower.includes("rate_limit_exceeded") || lower.includes("too many requests") || lower.includes("quota exceeded") || lower.includes("insufficient quota") || lower.includes("insufficient credits")) {
+        statusCode = 429;
+        code = "RATE_LIMIT_ERROR";
+        message = rawMsg;
+        retryable = false;
+      } else if (err.status === 401 || err.status === 403 || err.status === 402 || lower.includes("401") || lower.includes("403") || lower.includes("402") || lower.includes("unauthorized") || lower.includes("invalid_api_key")) {
+        statusCode = err.status || 401;
+        code = "AUTH_ERROR";
+        message = rawMsg;
+        retryable = false;
+      } else if (err.status) {
+        statusCode = err.status;
+      }
+      message = rawMsg;
+    }
+  } catch {
+    message = err.message || String(err);
+  }
+
+  if (statusCode === 429 && code !== "RATE_LIMIT_ERROR") {
+    code = "RATE_LIMIT_ERROR";
+  }
+
+  return res.status(statusCode).json({
+    success: false,
+    error: {
+      code,
+      errorCode: code,
+      stage: "AI Generation",
+      engine: "LLMRuntimeEngine / AIService",
+      provider,
+      model,
+      statusCode,
+      message,
+      retryable: code === "RATE_LIMIT_ERROR" || code === "AUTH_ERROR" ? false : retryable,
+      retryAfter,
+      requestId: `req-${Date.now()}`
+    }
+  });
+}
+
+// Development / Test path simulating HTTP 429 Rate Limit
+app.get("/api/test-429", (req, res) => {
+  return res.status(429).json({
+    success: false,
+    error: {
+      code: "RATE_LIMIT_ERROR",
+      errorCode: "RATE_LIMIT_ERROR",
+      stage: "AI Generation",
+      engine: "LLMRuntimeEngine / AIService",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      statusCode: 429,
+      message: "Rate limit exceeded.",
+      retryable: false,
+      retryAfter: null,
+      requestId: "req-test-429"
+    }
+  });
+});
+
 // POST /api/generate-plan
 app.post("/api/generate-plan", async (req, res) => {
   try {
@@ -301,12 +387,8 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
       mode: "live"
     });
   } catch (err: any) {
-    console.error("Plan endpoint error:", err);
-    return res.status(500).json({
-      success: false,
-      error: err.message || String(err),
-      stack: err.stack || "No stack trace available"
-    });
+    const userConfig = getActiveUserConfig(req);
+    return sendStructuredError(res, err, userConfig.provider, userConfig.defaultModel);
   }
 });
 
@@ -318,17 +400,17 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
 app.post("/api/generate", async (req, res) => {
   try {
     const userConfig = getActiveUserConfig(req);
-    const { prompt, blockchain, language, framework, contractType, plan, systemInstruction } = req.body;
+    const { prompt, blockchain, language, framework, contractType, plan, systemInstruction, targetPath, maxTokens } = req.body;
 
     if (!prompt) {
       return res.status(400).json({ error: "Prompt is required" });
     }
 
-    // Intercept pipeline execution if systemInstruction is present
+    // Intercept V2 single file generation when systemInstruction is present
     if (systemInstruction) {
-      console.log("[SERVER /api/generate] Serving pipeline request with custom systemInstruction.");
-      const result = await AIService.generateWorkspace(userConfig, prompt, systemInstruction);
-      return res.json(result);
+      console.log(`[SERVER /api/generate] Serving V2 single file generation for targetPath: "${targetPath || 'N/A'}", maxTokens: ${maxTokens || 'default'}`);
+      const rawText = await AIService.generateRawSource(userConfig, prompt, systemInstruction, targetPath, maxTokens);
+      return res.json({ success: true, data: rawText });
     }
 
     console.log(`[AI WORKSPACE ENGINE] STAGE 6-10: Generating workspace files on blockchain: ${blockchain}`);
@@ -477,12 +559,8 @@ Do NOT output markdown wrappers. Return raw, parsing-valid JSON.
       throw new Error("Invalid response format: files array is missing from AI output.");
     }
   } catch (err: any) {
-    console.error("Critical error in /api/generate:", err);
-    return res.status(500).json({
-      success: false,
-      error: err.message || String(err),
-      stack: err.stack || "No stack trace available"
-    });
+    const userConfig = getActiveUserConfig(req);
+    return sendStructuredError(res, err, userConfig.provider, userConfig.defaultModel);
   }
 });
 
@@ -563,12 +641,7 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
       mode: "live"
     });
   } catch (err: any) {
-    console.error("Critical error in /api/edit:", err);
-    return res.status(500).json({
-      success: false,
-      error: err.message || String(err),
-      stack: err.stack || "No stack trace available"
-    });
+    return sendStructuredError(res, err, userConfig.provider, userConfig.defaultModel);
   }
 });
 
@@ -936,90 +1009,33 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
       mode: "live"
     });
   } catch (err: any) {
-    console.error("Critical error in /api/audit:", err);
-    return res.status(500).json({
-      success: false,
-      error: err.message || String(err),
-      stack: err.stack || "No stack trace available"
-    });
+    const userConfig = getActiveUserConfig(req);
+    return sendStructuredError(res, err, userConfig.provider, userConfig.defaultModel);
   }
 });
 
 // POST /api/compile
 app.post("/api/compile", async (req, res) => {
-  const userConfig = getActiveUserConfig(req);
   const { blockchain, framework, files } = req.body;
   if (!files || files.length === 0) {
     return res.status(400).json({ error: "No files found to compile" });
   }
 
-  console.log(`Compiling files for blockchain: ${blockchain}, framework: ${framework}`);
-
-  const filesContext = files.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
-  const compilerPrompt = `
-You are a highly precise Smart Contract Compiler for "${blockchain}" running inside a professional cloud IDE.
-Analyze the following source files and determine if they would compile successfully using standard official toolchains.
-Check for any syntax errors, unresolved imports, unmatched brackets, or undeclared state variables.
-
-Workspace files:
-${filesContext}
-
-IMPORTANT COMPILER DIAGNOSTIC MANDATES:
-For every compilation warning or error, you MUST provide precise error metadata:
-1. "file": The exact path of the file that triggered the compiler warning/error (never empty, never "N/A").
-2. "line": The exact integer line number (never 0, never "N/A").
-3. "column": The exact integer column number (never "N/A").
-4. "severity": Either "error" or "warning".
-5. "classification": One of "Syntax" | "Import" | "Dependency" | "Inheritance" | "Visibility" | "Access Control" | "Undefined Event" | "Undefined Error" | "Undefined Variable" | "Type Mismatch" | "Constructor" | "Trait" | "Move Module" | "Anchor Account" | "Compiler Version" | "Framework Version" | "Configuration" | "Unknown".
-6. "codeSnippet": The exact faulty line of code or code snippet.
-7. "explanation": A detailed, friendly explanation of why the compiler failed at this point.
-8. "suggestedFix": Clear, precise, actionable instructions to repair this specific issue.
-
-Format the response strictly as a JSON object:
-{
-  "success": true|false,
-  "errors": [
-    {
-      "file": "path/to/file",
-      "line": 12,
-      "column": 1,
-      "severity": "error",
-      "classification": "Syntax",
-      "codeSnippet": "contract MyContract {",
-      "explanation": "Mismatched curly braces",
-      "suggestedFix": "Add a closing brace at the end of the contract.",
-      "message": "SyntaxError: Mismatched curly braces"
-    }
-  ],
-  "logs": [
-    "Compile trace line 1",
-    "Compile trace line 2"
-  ]
-}
-Do NOT output markdown wrappers like \`\`\`json. Return only raw, parsing-valid JSON.
-`;
+  console.log(`[COMPILER ENGINE] Compiling files for blockchain: ${blockchain}, framework: ${framework}`);
 
   try {
-    const result = await AIService.compileAnalysis(userConfig, compilerPrompt);
-    const parsed = result.data;
+    const cert = CompilerEngine.certifyCompilation(files, 'SmartContractProject', blockchain, framework);
+    const result = cert.result;
+    const rawLogs = (result.stdout || '') + '\n' + (result.stderr || '');
+
     return res.json({
-      success: parsed.success,
-      errors: (parsed.errors || []).map((e: any) => ({
-        file: e.file || "Unknown file",
-        line: typeof e.line === 'number' ? e.line : 1,
-        column: typeof e.column === 'number' ? e.column : 1,
-        severity: e.severity || "error",
-        classification: e.classification || "Unknown",
-        codeSnippet: e.codeSnippet || "N/A",
-        explanation: e.explanation || e.message || "N/A",
-        suggestedFix: e.suggestedFix || "N/A",
-        message: e.message || "N/A"
-      })),
-      logs: parsed.logs || [],
-      timestamp: new Date().toISOString()
+      success: result.success,
+      errors: result.diagnostics,
+      logs: rawLogs.split('\n'),
+      timestamp: result.timestamp
     });
   } catch (err: any) {
-    console.error("OpenAI compiler validation failed:", err);
+    console.error("[COMPILER ENGINE] Execution failed:", err);
     return res.status(500).json({
       success: false,
       error: err.message || String(err),

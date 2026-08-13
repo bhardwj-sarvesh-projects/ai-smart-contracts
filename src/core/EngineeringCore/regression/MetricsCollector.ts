@@ -4,6 +4,11 @@ export interface StageExecutionResult {
   stageName: string;
   passed: boolean;
   durationMs: number;
+  status?: 'PASS' | 'FAIL' | 'NOT_VERIFIED';
+  startedAt?: string;
+  completedAt?: string;
+  evidence?: string[];
+  error?: string;
   details?: string;
 }
 
@@ -16,6 +21,7 @@ export interface ProjectRunMetrics {
   promptCategory: string;
   promptText: string;
   isSuccess: boolean;
+  runStatus?: 'PASS' | 'FAIL' | 'NOT_VERIFIED';
 
   // Pipeline stage pass statuses
   generationPassed: boolean;
@@ -64,6 +70,7 @@ export interface AggregateMetrics {
   totalRuns: number;
   successfulRuns: number;
   failedRuns: number;
+  notVerifiedRuns: number;
 
   // Percentage pass rates
   generationSuccessRate: number;
@@ -115,8 +122,9 @@ export class MetricsCollector {
       return this.emptyAggregateMetrics();
     }
 
-    const successful = this.runs.filter(r => r.isSuccess).length;
-    const failed = total - successful;
+    const successful = this.runs.filter(r => r.runStatus ? r.runStatus === 'PASS' : r.isSuccess).length;
+    const failed = this.runs.filter(r => r.runStatus ? r.runStatus === 'FAIL' : !r.isSuccess).length;
+    const notVerified = this.runs.filter(r => r.runStatus === 'NOT_VERIFIED').length;
 
     const genPass = this.runs.filter(r => r.generationPassed).length;
     const compPass = this.runs.filter(r => r.compilationPassed).length;
@@ -169,6 +177,7 @@ export class MetricsCollector {
       totalRuns: total,
       successfulRuns: successful,
       failedRuns: failed,
+      notVerifiedRuns: notVerified,
 
       generationSuccessRate: (genPass / total) * 100,
       compilationSuccessRate: (compPass / total) * 100,
@@ -231,6 +240,7 @@ export class MetricsCollector {
       totalRuns: 0,
       successfulRuns: 0,
       failedRuns: 0,
+      notVerifiedRuns: 0,
       generationSuccessRate: 0,
       compilationSuccessRate: 0,
       selfHealingSuccessRate: 0,

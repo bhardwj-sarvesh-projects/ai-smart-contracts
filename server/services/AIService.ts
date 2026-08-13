@@ -1,6 +1,5 @@
 import { ProviderFactory, isDummyOrEmptyKey } from "../providers/ProviderFactory";
 import { AIProvider, AIResponse, HealthResponse } from "../providers/AIProvider";
-import { OpenRouterProvider } from "../providers/OpenRouterProvider";
 import { UserConfig } from "./SettingsService";
 import { JSONNormalizer } from "./JSONNormalizer";
 
@@ -20,18 +19,18 @@ export class AIService {
     console.log(`[AI SERVICE LOG] --------------------------------------------------`);
   }
 
-  // Unified fallback engine with self-healing automatic retries and server-side fallback
+  // Execution engine on selected provider with retry handling
   private static async executeWithFallback(
     settings: UserConfig,
     action: string,
     actionType: 'plan' | 'workspace' | 'edit' | 'audit' | 'compile',
     executeOnProvider: (provider: AIProvider) => Promise<AIResponse>,
-    maxRetries: number = 2
+    maxRetries: number = 1
   ): Promise<any> {
     const primaryProvider = ProviderFactory.getProvider(settings);
     let lastError: any = null;
 
-    // Try primary provider first (with retries)
+    // Execute on selected provider
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       const startTime = Date.now();
       try {
@@ -52,21 +51,15 @@ export class AIService {
         }
       } catch (err: any) {
         lastError = err;
-        console.warn(`[AI SERVICE] Error using primary provider ${primaryProvider.name} (Attempt ${attempt}/${maxRetries}):`, err.message || err);
+        console.warn(`[AI SERVICE] Error using provider ${primaryProvider.name} (Attempt ${attempt}/${maxRetries}):`, err.message || err);
         
-        // Fast break on unrecoverable authentication errors
-        const isAuthErr = err.isAuthError || err.status === 401 || err.status === 403 ||
-          (err.message && (
-            err.message.includes('401') ||
-            err.message.includes('403') ||
-            err.message.toLowerCase().includes('invalid_api_key') ||
-            err.message.toLowerCase().includes('incorrect api key') ||
-            err.message.toLowerCase().includes('unauthorized')
-          ));
+        const msg = (err.message || String(err)).toLowerCase();
+        const isRateLimit = err.status === 429 || err.isTerminal || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate exceeded") || msg.includes("rate_limit_exceeded") || msg.includes("too many requests") || msg.includes("tpd") || msg.includes("tpm") || msg.includes("rpm") || msg.includes("quota exceeded") || msg.includes("insufficient quota") || msg.includes("insufficient credits");
+        const isAuth = err.status === 401 || err.status === 403 || err.status === 402 || msg.includes("401") || msg.includes("403") || msg.includes("402") || msg.includes("invalid_api_key") || msg.includes("unauthorized");
 
-        if (isAuthErr) {
-          console.warn(`[AI SERVICE] Primary provider ${primaryProvider.name} encountered authentication error. Skipping retries to trigger fallback.`);
-          break;
+        if (isRateLimit || isAuth) {
+          console.warn(`[AI SERVICE] Terminal error encountered on provider ${primaryProvider.name}. Bypassing retries.`);
+          throw err;
         }
 
         if (attempt < maxRetries) {
@@ -75,68 +68,41 @@ export class AIService {
       }
     }
 
-    // If primary provider failed, fallback to OpenRouter or OpenAI depending on available keys
-    const envOpenRouterKey = process.env.OPENROUTER_API_KEY && !isDummyOrEmptyKey(process.env.OPENROUTER_API_KEY, "openrouter") ? process.env.OPENROUTER_API_KEY : "";
-    const envOpenAIKey = process.env.OPENAI_API_KEY && !isDummyOrEmptyKey(process.env.OPENAI_API_KEY, "openai") ? process.env.OPENAI_API_KEY : "";
+    throw lastError;
+  }
 
-    if (primaryProvider.name !== "openrouter" && envOpenRouterKey) {
-      console.warn(`[AI SERVICE] Primary provider ${primaryProvider.name} failed all attempts. Gracefully falling back to server-side OpenRouter.`);
-      
-      const fallbackProvider = new OpenRouterProvider({
-        apiKey: envOpenRouterKey,
-        model: "google/gemini-2.5-pro",
-        temperature: settings.temperature || 0.2,
-        maxTokens: settings.maxTokens || 2000
-      });
+  static async generateRawSource(
+    settings: UserConfig,
+    prompt: string,
+    systemInstruction?: string,
+    targetPath?: string,
+    maxTokens?: number
+  ): Promise<string> {
+    const primaryProvider = ProviderFactory.getProvider(settings);
+    let lastError: any = null;
+    const reqOptions = { maxTokens, targetPath };
 
+    for (let attempt = 1; attempt <= 1; attempt++) {
       const startTime = Date.now();
       try {
-        const response = await executeOnProvider(fallbackProvider);
-        this.logRequest(fallbackProvider, action, response, startTime);
+        const response = await primaryProvider.generate(prompt, systemInstruction, undefined, reqOptions);
+        this.logRequest(primaryProvider, "Generate Raw Source", response, startTime);
+        return response.text;
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[AI SERVICE] Raw source generation failed on ${primaryProvider.name}:`, err.message || err);
 
-        const parsed = JSONNormalizer.parseAndNormalize(response.text, actionType);
-        return {
-          data: parsed,
-          model: response.model,
-          durationMs: response.durationMs,
-          usage: response.usage,
-          fallbackUsed: true
-        };
-      } catch (fallbackErr: any) {
-        console.error(`[AI SERVICE] Fallback provider OpenRouter also failed:`, fallbackErr.message || fallbackErr);
-        throw new Error(`AI Service failure: Both primary provider (${primaryProvider.name}) and backup (OpenRouter) failed. Detail: ${fallbackErr.message || String(fallbackErr)}`);
-      }
-    } else if (primaryProvider.name === "openrouter" && envOpenAIKey) {
-      console.warn(`[AI SERVICE] Primary provider OpenRouter failed all attempts. Gracefully falling back to server-side OpenAI.`);
-      
-      const { OpenAIProvider } = await import("../providers/OpenAIProvider");
-      const fallbackProvider = new OpenAIProvider({
-        apiKey: envOpenAIKey,
-        model: "gpt-4o-mini",
-        temperature: settings.temperature || 0.2,
-        maxTokens: settings.maxTokens || 2000
-      });
+        const msg = (err.message || String(err)).toLowerCase();
+        const isRateLimit = err.status === 429 || err.isTerminal || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate exceeded") || msg.includes("rate_limit_exceeded") || msg.includes("too many requests") || msg.includes("tpd") || msg.includes("tpm") || msg.includes("rpm") || msg.includes("quota exceeded") || msg.includes("insufficient quota") || msg.includes("insufficient credits");
+        const isAuth = err.status === 401 || err.status === 403 || err.status === 402 || msg.includes("401") || msg.includes("403") || msg.includes("402") || msg.includes("invalid_api_key") || msg.includes("unauthorized");
 
-      const startTime = Date.now();
-      try {
-        const response = await executeOnProvider(fallbackProvider);
-        this.logRequest(fallbackProvider, action, response, startTime);
-
-        const parsed = JSONNormalizer.parseAndNormalize(response.text, actionType);
-        return {
-          data: parsed,
-          model: response.model,
-          durationMs: response.durationMs,
-          usage: response.usage,
-          fallbackUsed: true
-        };
-      } catch (fallbackErr: any) {
-        console.error(`[AI SERVICE] Fallback provider OpenAI also failed:`, fallbackErr.message || fallbackErr);
-        throw new Error(`AI Service failure: Both primary provider (OpenRouter) and backup (OpenAI) failed. Detail: ${fallbackErr.message || String(fallbackErr)}`);
+        if (isRateLimit || isAuth) {
+          throw err;
+        }
       }
     }
 
-    throw lastError;
+    throw lastError || new Error(`Raw source generation failed on provider ${primaryProvider.name}.`);
   }
 
   static async generatePlan(settings: UserConfig, prompt: string, systemInstruction?: string): Promise<any> {

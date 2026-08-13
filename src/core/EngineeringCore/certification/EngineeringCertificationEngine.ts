@@ -1,11 +1,24 @@
 import { ProjectFile } from '../../../types';
 import { sha256 } from '../utils/cryptoFallback';
+import { CompilationResult } from '../compiler/CompilerEngine';
+import { TestingValidationResult } from '../testing/TestingValidationEngine';
+import { SecurityAuditResult } from '../security/SecurityAuditEngine';
+import { DependencyValidationResult } from '../validators/DependencyValidationEngine';
+import { ArchitectureValidationResult } from '../architecture/ArchitectureValidationEngine';
+import { DocumentationCertificationResult } from '../documentation/DocumentationEngine';
+import { DeploymentResult } from '../deployment/DeploymentEngine';
+import { ExportCertificationResult } from '../export/ExportEngine';
+
+export type GateVerificationStatus = 'PASS' | 'FAIL' | 'NOT_VERIFIED';
 
 export interface GateStatus {
   name: string;
+  status: GateVerificationStatus;
   passed: boolean;
   score: number;
   details: string;
+  evidenceSource?: string;
+  timestamp?: string;
 }
 
 export interface ValidationCollectorResults {
@@ -13,13 +26,45 @@ export interface ValidationCollectorResults {
   integrity: GateStatus;
   dependencies: GateStatus;
   compiler: GateStatus;
-  copilot: GateStatus;
   security: GateStatus;
   deployment: GateStatus;
   architecture: GateStatus;
   testing: GateStatus;
   documentation: GateStatus;
   exportGate: GateStatus;
+}
+
+export interface CertificationArtifacts {
+  projectFiles: ProjectFile[];
+  internalDiagnostics: ProjectFile[];
+}
+
+export interface CertificationEvidenceInput {
+  compilationResult?: CompilationResult | any;
+  testingResult?: TestingValidationResult | any;
+  securityAuditResult?: SecurityAuditResult | any;
+  dependencyResult?: DependencyValidationResult | any;
+  architectureResult?: ArchitectureValidationResult | any;
+  documentationResult?: DocumentationCertificationResult | any;
+  deploymentResult?: DeploymentResult | any;
+  exportResult?: ExportCertificationResult | any;
+}
+
+export interface CertificationOptions {
+  projectId?: string;
+  customCertificationId?: string;
+  framework?: string;
+  compilerVersion?: string;
+  language?: string;
+  compilationResult?: CompilationResult | any;
+  testingResult?: TestingValidationResult | any;
+  securityAuditResult?: SecurityAuditResult | any;
+  dependencyResult?: DependencyValidationResult | any;
+  architectureResult?: ArchitectureValidationResult | any;
+  documentationResult?: DocumentationCertificationResult | any;
+  deploymentResult?: DeploymentResult | any;
+  exportResult?: ExportCertificationResult | any;
+  evidence?: CertificationEvidenceInput;
 }
 
 export interface CertificationData {
@@ -36,23 +81,21 @@ export interface CertificationData {
   generatedTestsCount: number;
   generatedDocsCount: number;
   generatedReportsCount: number;
-  validationTimeline: Array<{ gate: string; timestamp: string; durationMs: number; status: 'PASS' | 'FAIL' }>;
+  validationTimeline: Array<{ gate: string; timestamp: string; durationMs: number | null; status: GateVerificationStatus }>;
   gates: ValidationCollectorResults;
-  qualityScore: number;
-  architectureScore: number;
-  securityScore: number;
-  testingScore: number;
   certificationScore: number;
   overallGrade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'F';
-  remainingWarnings: string[];
-  knownLimitations: string[];
   finalRecommendation: string;
-  clientDeliveryStatus: 'CERTIFIED & APPROVED FOR CLIENT DELIVERY' | 'BLOCKED - GATES FAILED';
+  clientDeliveryStatus: 'CERTIFIED & APPROVED FOR CLIENT DELIVERY' | 'BLOCKED - GATES FAILED' | 'BLOCKED - EVIDENCE MISSING OR UNVERIFIED';
+  executionEvidence: any;
 }
 
 export interface EngineeringCertificationResult {
   isCertified: boolean;
+  status: 'CERTIFIED' | 'FAILED' | 'NOT_VERIFIED';
   certifiedFiles: ProjectFile[];
+  internalDiagnostics: ProjectFile[];
+  artifacts: CertificationArtifacts;
   certificateMd: string;
   evidenceManifestJson: string;
   certificationId: string;
@@ -72,228 +115,832 @@ export class EngineeringCertificationEngine {
     return 'CERT-' + randomHex;
   }
 
-  /**
-   * 1. Collect Workspace Status
-   */
   public static collectWorkspaceStatus(files: ProjectFile[]): GateStatus {
     const hasFiles = files && files.length > 0;
-    const hasContract = files.some(f =>
+    const hasContract = files && files.some(f =>
       f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move') || f.path.endsWith('.ts')
     );
     const passed = hasFiles && hasContract;
+    const status: GateVerificationStatus = passed ? 'PASS' : 'FAIL';
     return {
       name: 'Workspace Preservation Engine',
+      status,
       passed,
       score: passed ? 100 : 0,
       details: passed ? `Workspace validated with ${files.length} persistent project files.` : 'Workspace is missing source contract files.'
     };
   }
 
-  /**
-   * 2. Collect Project Integrity Status
-   */
   public static collectProjectIntegrityStatus(files: ProjectFile[]): GateStatus {
+    if (!files || files.length === 0) {
+      return {
+        name: 'Project Integrity Engine',
+        status: 'FAIL',
+        passed: false,
+        score: 0,
+        details: 'Project integrity check failed: empty file array.'
+      };
+    }
+
     const hasRootFiles = files.some(f => f.path.includes('/')) || files.length >= 2;
     const hasNoEmptyFiles = files.every(f => f.content && f.content.trim().length > 0);
-    const passed = hasRootFiles && hasNoEmptyFiles;
+    
+    let hasLeakage = false;
+    let leakageDetails = '';
+    const codeFiles = files.filter(f => f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move'));
+    for (const file of codeFiles) {
+      if (file.content.trim().startsWith('{') || file.content.trim().startsWith('[')) {
+        hasLeakage = true;
+        leakageDetails = `JSON leakage detected in ${file.path}`;
+      }
+      if (file.content.includes('```')) {
+        hasLeakage = true;
+        leakageDetails = `Markdown leakage detected in ${file.path}`;
+      }
+    }
+
+    const passed = hasRootFiles && hasNoEmptyFiles && !hasLeakage;
+    const status: GateVerificationStatus = passed ? 'PASS' : 'FAIL';
     return {
       name: 'Project Integrity Engine',
+      status,
       passed,
       score: passed ? 100 : 0,
-      details: passed ? 'Project structural integrity and file paths verified.' : 'Project integrity check failed due to empty files or broken layout.'
+      details: passed ? 'Project structural integrity and file paths verified.' : `Project integrity check failed: ${leakageDetails || 'empty files or broken layout.'}`
     };
   }
 
-  /**
-   * 3. Collect Dependency Validation Status
-   */
-  public static collectDependencyStatus(files: ProjectFile[]): GateStatus {
-    const passed = true; // Lockfiles and dependencies verified cleanly
+  public static collectDependencyStatus(dependencyResult?: DependencyValidationResult): GateStatus {
+    if (!dependencyResult) {
+      return {
+        name: 'Dependency Validation Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Dependency validation evidence missing (NOT_VERIFIED).'
+      };
+    }
+
+    if (dependencyResult.overallStatus === 'WARN') {
+      return {
+        name: 'Dependency Validation Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: `Dependency validation warning (NOT_VERIFIED): ${dependencyResult.warnings ? dependencyResult.warnings.join('; ') : 'warnings detected'}`
+      };
+    }
+
+    const passed = dependencyResult.overallStatus === 'PASS';
+    const status: GateVerificationStatus = passed ? 'PASS' : 'FAIL';
     return {
       name: 'Dependency Validation Engine',
+      status,
       passed,
-      score: 100,
-      details: 'Toolchain dependencies, imports, and security lockfiles verified with 0 vulnerabilities.'
+      score: passed ? 100 : 0,
+      details: passed
+        ? `Toolchain dependencies verified for ${dependencyResult.projectName} (${dependencyResult.checks ? dependencyResult.checks.length : 0} checks passed).`
+        : `Dependency validation failed with warnings/errors: ${(dependencyResult as any).errors ? (dependencyResult as any).errors.join('; ') : (dependencyResult.warnings ? dependencyResult.warnings.join('; ') : 'errors detected')}`
     };
   }
 
-  /**
-   * 4. Collect Compiler Results
-   */
-  public static collectCompilerResults(files: ProjectFile[], blockchain: string): GateStatus {
-    const contractFiles = files.filter(f =>
-      f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move')
-    );
-    const hasErrors = contractFiles.some(f => f.content.includes('pragma error_test_trigger'));
-    const passed = contractFiles.length > 0 && !hasErrors;
+  public static collectCompilerResults(compilationResult?: CompilationResult): GateStatus {
+    if (!compilationResult || compilationResult.status === 'NOT_VERIFIED') {
+      return {
+        name: 'Compiler Intelligence Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Compilation evidence missing or toolchain unavailable (NOT_VERIFIED).'
+      };
+    }
+
+    const isRealExecution = compilationResult.verificationMode === 'REAL_EXECUTION';
+    const hasValidExitCode = typeof compilationResult.exitCode === 'number';
+
+    if (
+      compilationResult.status === 'PASS' &&
+      isRealExecution &&
+      hasValidExitCode &&
+      compilationResult.exitCode === 0
+    ) {
+      return {
+        name: 'Compiler Intelligence Engine',
+        status: 'PASS',
+        passed: true,
+        score: 100,
+        details: `Compiler build verified (${compilationResult.stdout || '0 errors'}).`
+      };
+    }
+
+    if (compilationResult.status === 'PASS' && (!isRealExecution || !hasValidExitCode)) {
+      return {
+        name: 'Compiler Intelligence Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Compiler evidence incomplete or missing real execution mode / exit code (NOT_VERIFIED).'
+      };
+    }
+
     return {
       name: 'Compiler Intelligence Engine',
-      passed,
-      score: passed ? 100 : 0,
-      details: passed ? `Compiler build verified for ${blockchain} (0 syntax errors, 0 warnings).` : 'Compiler build failed with compilation errors.'
+      status: 'FAIL',
+      passed: false,
+      score: 0,
+      details: `Compiler build failed: ${compilationResult.stderr || 'compilation errors detected'}`
     };
   }
 
-  /**
-   * 5. Collect Copilot Results
-   */
-  public static collectCopilotResults(files: ProjectFile[]): GateStatus {
-    return {
-      name: 'AI Copilot Intelligence Engine',
-      passed: true,
-      score: 100,
-      details: 'AI Copilot contextual prompt awareness and inline logic checks passed.'
-    };
-  }
+  public static collectTestingResults(testingResult?: TestingValidationResult): GateStatus {
+    if (!testingResult || testingResult.verificationMode === 'TOOLCHAIN_UNAVAILABLE' || testingResult.status === 'NOT_VERIFIED') {
+      return {
+        name: 'Testing & QA Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Testing gate not verified: test toolchain unavailable or no test execution evidence provided (NOT_VERIFIED).'
+      };
+    }
 
-  /**
-   * 6. Collect Security Results
-   */
-  public static collectSecurityResults(files: ProjectFile[], blockchain: string): GateStatus {
-    const hasCriticalVuln = files.some(f =>
-      f.content.includes('selfdestruct(') || f.content.includes('tx.origin ==')
-    );
-    const passed = !hasCriticalVuln;
-    return {
-      name: 'Enterprise Security Engine',
-      passed,
-      score: passed ? 98 : 40,
-      details: passed ? 'Security audit passed: 0 Critical / High vulnerabilities. Access control and ReentrancyGuard verified.' : 'Critical security vulnerability detected.'
-    };
-  }
+    const isRealExecution = testingResult.verificationMode === 'REAL_EXECUTION';
+    const hasValidExitStatus = typeof testingResult.exitStatus === 'number';
 
-  /**
-   * 7. Collect Deployment Results
-   */
-  public static collectDeploymentResults(files: ProjectFile[], blockchain: string): GateStatus {
-    const hasDeployAsset = files.some(f =>
-      f.path.includes('script/') || f.path.includes('deploy/') || f.path.includes('DEPLOYMENT') || f.path.endsWith('.env.example')
-    );
-    return {
-      name: 'Deployment Engine',
-      passed: hasDeployAsset,
-      score: hasDeployAsset ? 100 : 0,
-      details: hasDeployAsset ? `Deterministic RPC deployment scripts and verification runbooks created for ${blockchain}.` : 'Missing deployment scripts or RPC configurations.'
-    };
-  }
+    if (
+      testingResult.status === 'PASS' &&
+      isRealExecution &&
+      hasValidExitStatus &&
+      testingResult.exitStatus === 0
+    ) {
+      const durationStr = testingResult.evidence?.durationMs != null ? `${testingResult.evidence.durationMs}ms` : 'UNKNOWN';
+      return {
+        name: 'Testing & QA Engine',
+        status: 'PASS',
+        passed: true,
+        score: 100,
+        details: `Real test execution passed (exit status 0, duration ${durationStr}).`
+      };
+    }
 
-  /**
-   * 8. Collect Architecture Results
-   */
-  public static collectArchitectureResults(files: ProjectFile[], prompt: string, blockchain: string): GateStatus {
-    const contractFiles = files.filter(f =>
-      f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move')
-    );
-    const passed = contractFiles.length > 0;
-    return {
-      name: 'Architecture Validation Engine',
-      passed,
-      score: passed ? 96 : 0,
-      details: passed ? 'Business logic requirement mapping achieved >= 90% specification coverage.' : 'Architecture validation failed: specification requirements missing.'
-    };
-  }
+    if (testingResult.status === 'PASS' && (!isRealExecution || !hasValidExitStatus)) {
+      return {
+        name: 'Testing & QA Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Testing evidence incomplete or missing real execution mode / exit status (NOT_VERIFIED).'
+      };
+    }
 
-  /**
-   * 9. Collect Testing Results
-   */
-  public static collectTestingResults(files: ProjectFile[], blockchain: string): GateStatus {
-    const testFiles = files.filter(f =>
-      f.path.includes('test') || f.path.includes('spec') || f.path.endsWith('.t.sol')
-    );
-    const passed = testFiles.length > 0;
     return {
       name: 'Testing & QA Engine',
-      passed,
-      score: passed ? 98 : 0,
-      details: passed ? `Automated test suite verified (${testFiles.length} test files, >= 95% line coverage).` : 'Testing gate failed: no automated unit or fuzz test files found.'
+      status: 'FAIL',
+      passed: false,
+      score: 0,
+      details: `Real test execution failed with exit status ${testingResult.exitStatus ?? 'UNKNOWN'}. Stderr: ${testingResult.stderr || testingResult.stdout || 'no logs'}`
     };
   }
 
-  /**
-   * 10. Collect Documentation Results
-   */
-  public static collectDocumentationResults(files: ProjectFile[]): GateStatus {
-    const requiredDocs = ['README.md', 'ARCHITECTURE.md', 'SECURITY.md', 'DEPLOYMENT.md', 'API_REFERENCE.md'];
-    const currentPathsUpper = files.map(f => f.path.toUpperCase());
-    const presentDocs = requiredDocs.filter(d => currentPathsUpper.includes(d.toUpperCase()));
-    const passed = presentDocs.length === requiredDocs.length;
+  public static collectSecurityResults(securityAuditResult?: SecurityAuditResult | any): GateStatus {
+    if (!securityAuditResult) {
+      return {
+        name: 'Enterprise Security Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Security audit evidence missing (NOT_VERIFIED).'
+      };
+    }
+
+    const hasAuditEvidence = !!(
+      securityAuditResult &&
+      (securityAuditResult.reportMarkdown || securityAuditResult.findings || securityAuditResult.timestamp || securityAuditResult.analysisTimestamp)
+    );
+
+    const criticals = securityAuditResult.criticalCount ?? (securityAuditResult as any).criticalFindings ?? 0;
+    const highs = securityAuditResult.highCount ?? (securityAuditResult as any).highFindings ?? 0;
+    const isPassStatus = securityAuditResult.overallStatus === 'PASS';
+
+    if (!hasAuditEvidence) {
+      return {
+        name: 'Enterprise Security Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Security audit evidence missing or audit not executed (NOT_VERIFIED).'
+      };
+    }
+
+    if (isPassStatus && criticals === 0 && highs === 0) {
+      return {
+        name: 'Enterprise Security Engine',
+        status: 'PASS',
+        passed: true,
+        score: 100,
+        details: 'Security audit passed: 0 Critical / High vulnerabilities verified by SecurityAuditEngine.'
+      };
+    }
+
+    return {
+      name: 'Enterprise Security Engine',
+      status: 'FAIL',
+      passed: false,
+      score: 0,
+      details: `Security audit failed: ${criticals} Critical, ${highs} High findings detected.`
+    };
+  }
+
+  public static collectArchitectureResults(architectureResult?: ArchitectureValidationResult | any): GateStatus {
+    if (!architectureResult) {
+      return {
+        name: 'Architecture Validation Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Architecture validation evidence missing (NOT_VERIFIED).'
+      };
+    }
+
+    const hasAuthoritativeEvidence = !!(
+      architectureResult &&
+      architectureResult.requirements &&
+      architectureResult.comparison &&
+      architectureResult.scoreBreakdown
+    );
+
+    const isPassStatus = architectureResult.architecturePassed === true || architectureResult.status === 'PASS';
+
+    if (isPassStatus && hasAuthoritativeEvidence) {
+      return {
+        name: 'Architecture Validation Engine',
+        status: 'PASS',
+        passed: true,
+        score: 100,
+        details: 'Architecture specification and business logic mapping verified.'
+      };
+    }
+
+    if (isPassStatus && !hasAuthoritativeEvidence) {
+      return {
+        name: 'Architecture Validation Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Architecture validation evidence missing or incomplete (NOT_VERIFIED).'
+      };
+    }
+
+    return {
+      name: 'Architecture Validation Engine',
+      status: 'FAIL',
+      passed: false,
+      score: 0,
+      details: 'Architecture validation failed.'
+    };
+  }
+
+  public static collectDocumentationResults(documentationResult?: DocumentationCertificationResult | any): GateStatus {
+    if (!documentationResult) {
+      return {
+        name: 'Documentation Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Documentation validation evidence missing (NOT_VERIFIED).'
+      };
+    }
+
+    const hasAuthoritativeEvidence = !!(
+      documentationResult &&
+      (documentationResult.docReportGenerated === true ||
+       documentationResult.knowledgeIndexGenerated === true ||
+       (documentationResult.reportMarkdown && documentationResult.certifiedFiles && documentationResult.certifiedFiles.length > 0))
+    );
+
+    const isPassStatus = documentationResult.documentationPassed === true || documentationResult.status === 'PASS';
+
+    if (isPassStatus && hasAuthoritativeEvidence) {
+      return {
+        name: 'Documentation Engine',
+        status: 'PASS',
+        passed: true,
+        score: 100,
+        details: 'Documentation suite verified by DocumentationEngine.'
+      };
+    }
+
+    if (isPassStatus && !hasAuthoritativeEvidence) {
+      return {
+        name: 'Documentation Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Documentation validation evidence missing or incomplete (NOT_VERIFIED).'
+      };
+    }
+
     return {
       name: 'Documentation Engine',
-      passed,
-      score: passed ? 100 : 50,
-      details: passed ? `Complete enterprise documentation suite generated (${presentDocs.length} core guides + visual Mermaid diagrams).` : 'Documentation gate failed: missing required markdown runbooks.'
+      status: 'FAIL',
+      passed: false,
+      score: 0,
+      details: 'Documentation gate failed: missing required guides.'
     };
   }
 
-  /**
-   * 11. Collect Export Results
-   */
+  public static collectDeploymentResults(deploymentResult?: DeploymentResult | any): GateStatus {
+    if (!deploymentResult) {
+      return {
+        name: 'Deployment Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Deployment validation evidence missing (NOT_VERIFIED).'
+      };
+    }
+
+    const hasAuthoritativeEvidence = !!(
+      deploymentResult &&
+      (deploymentResult.deploymentId || deploymentResult.reportMarkdown || deploymentResult.stateHistory || deploymentResult.state)
+    );
+
+    const isPassStatus = deploymentResult.state === 'COMPLETED' || deploymentResult.status === 'PASS';
+
+    if (isPassStatus && hasAuthoritativeEvidence) {
+      return {
+        name: 'Deployment Engine',
+        status: 'PASS',
+        passed: true,
+        score: 100,
+        details: 'Deployment configuration and assets verified.'
+      };
+    }
+
+    if (!hasAuthoritativeEvidence) {
+      return {
+        name: 'Deployment Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Deployment validation evidence missing or unverified (NOT_VERIFIED).'
+      };
+    }
+
+    return {
+      name: 'Deployment Engine',
+      status: 'FAIL',
+      passed: false,
+      score: 0,
+      details: 'Deployment validation failed: missing scripts or invalid configuration.'
+    };
+  }
+
   public static collectExportResults(
-    files: ProjectFile[],
-    projectName: string,
-    prompt: string,
-    blockchain: string
+    exportResult?: ExportCertificationResult | any,
+    authoritativeGates?: Record<string, any>
   ): GateStatus {
-    const hasChecksums = files.some(f => f.path.toUpperCase().includes('CHECKSUMS'));
-    const hasManifest = files.some(f => f.path.toUpperCase().includes('MANIFEST'));
-    const hasDeliverySummary = files.some(f => f.path.toUpperCase().includes('DELIVERY_SUMMARY'));
-    const passed = hasChecksums && hasManifest && hasDeliverySummary;
+    if (!exportResult) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Export package certification evidence missing (NOT_VERIFIED).'
+      };
+    }
+
+    if (exportResult.status === 'FAIL') {
+      return {
+        name: 'Export Certification Engine',
+        status: 'FAIL',
+        passed: false,
+        score: 0,
+        details: `Export gate failed: ${(exportResult.issues || []).join('; ')}`
+      };
+    }
+
+    if (!exportResult.status) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Export package certification evidence incomplete: missing status (NOT_VERIFIED).'
+      };
+    }
+
+    if (exportResult.status === 'NOT_VERIFIED') {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Export package certification is not verified (NOT_VERIFIED).'
+      };
+    }
+
+    if (exportResult.status !== 'PASS') {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: `Export package status is invalid: ${exportResult.status} (NOT_VERIFIED).`
+      };
+    }
+
+    // Require exportCertified === true
+    if (exportResult.exportCertified !== true) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Export package is not certified (exportCertified is not true).'
+      };
+    }
+
+    // Require exportedFiles array
+    if (!exportResult.exportedFiles || !Array.isArray(exportResult.exportedFiles) || exportResult.exportedFiles.length === 0) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Export package is missing exported files.'
+      };
+    }
+
+    // Require manifestJson string
+    if (typeof exportResult.manifestJson !== 'string' || exportResult.manifestJson.trim().length === 0) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Export package is missing manifestJson.'
+      };
+    }
+
+    // Require checksumsTxt string
+    if (typeof exportResult.checksumsTxt !== 'string' || exportResult.checksumsTxt.trim().length === 0) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Export package is missing checksumsTxt.'
+      };
+    }
+
+    // Path normalization helper
+    const normalizePath = (p: string): string => {
+      let np = p.replace(/\\/g, '/');
+      if (np.startsWith('./')) {
+        np = np.substring(2);
+      }
+      return np;
+    };
+
+    // 1. MANIFEST JSON VALIDATION
+    let manifest: any;
+    try {
+      manifest = JSON.parse(exportResult.manifestJson);
+    } catch (e) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Export package manifestJson parsing failed (NOT_VERIFIED).'
+      };
+    }
+
+    if (!manifest || typeof manifest !== 'object' || !manifest.hashes || typeof manifest.hashes !== 'object') {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Export package manifest is missing or incomplete (NOT_VERIFIED).'
+      };
+    }
+
+    const exportedPaths = exportResult.exportedFiles.map((f: any) => f.path);
+    const seenPaths = new Set<string>();
+    for (const p of exportedPaths) {
+      const norm = normalizePath(p);
+      if (seenPaths.has(norm)) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Duplicate file path in exported files: ${p}`
+        };
+      }
+      seenPaths.add(norm);
+    }
+
+    if (exportedPaths.some(p => p.includes('.diagnostics'))) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Internal .diagnostics files must not be present in exported files.'
+      };
+    }
+
+    const manifestHashesKeys = Object.keys(manifest.hashes);
+    if (manifestHashesKeys.some(p => p.includes('.diagnostics'))) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Internal .diagnostics files must not be present in manifest.'
+      };
+    }
+
+    const exportedPathsNormalized = new Set<string>(exportedPaths.map(normalizePath));
+    const manifestHashesKeysNormalized = new Set<string>(manifestHashesKeys.map(normalizePath));
+
+    if (manifestHashesKeysNormalized.size !== manifestHashesKeys.length) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Duplicate file paths exist in manifest hashes.'
+      };
+    }
+
+    if (exportedPathsNormalized.size !== manifestHashesKeysNormalized.size) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Manifest file count matches count mismatch.'
+      };
+    }
+
+    // Every manifest file entry exists in exportedFiles
+    for (const p of manifestHashesKeysNormalized) {
+      if (!exportedPathsNormalized.has(p)) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Manifest lists file '${p}' which does not exist in exported files.`
+        };
+      }
+    }
+
+    // Every exported file is represented in the manifest
+    for (const p of exportedPathsNormalized) {
+      if (!manifestHashesKeysNormalized.has(p)) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Exported file '${p}' is missing from manifest.`
+        };
+      }
+    }
+
+    // Check optional lists in manifest if present
+    const manifestLists = [
+      manifest.artifacts,
+      manifest.reports,
+      manifest.documentation,
+      manifest.diagrams
+    ];
+    for (const list of manifestLists) {
+      if (Array.isArray(list)) {
+        const listSeen = new Set<string>();
+        for (const p of list) {
+          if (typeof p !== 'string') {
+            return {
+              name: 'Export Certification Engine',
+              status: 'NOT_VERIFIED',
+              passed: false,
+              score: 0,
+              details: 'Manifest file list contains non-string entry.'
+            };
+          }
+          const norm = normalizePath(p);
+          if (listSeen.has(norm)) {
+            return {
+              name: 'Export Certification Engine',
+              status: 'NOT_VERIFIED',
+              passed: false,
+              score: 0,
+              details: `Duplicate path in manifest list: ${p}`
+            };
+          }
+          listSeen.add(norm);
+
+          if (!exportedPathsNormalized.has(norm)) {
+            return {
+              name: 'Export Certification Engine',
+              status: 'NOT_VERIFIED',
+              passed: false,
+              score: 0,
+              details: `Manifest list references file '${p}' which does not exist in exported files.`
+            };
+          }
+        }
+      }
+    }
+
+    // 2. CHECKSUMS TXT VALIDATION
+    const checksumPaths = new Set<string>();
+    const checksumMap = new Map<string, string>();
+    const lines = exportResult.checksumsTxt.split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
+
+    if (lines.length === 0) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Checksums content is empty or unparsable.'
+      };
+    }
+
+    for (const line of lines) {
+      const match = line.match(/^([a-fA-F0-9]{64})\s+(.+)$/);
+      if (!match) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: 'Checksums format is invalid or cannot be parsed.'
+        };
+      }
+      const hash = match[1].toLowerCase();
+      const path = match[2];
+      const normPath = normalizePath(path);
+      if (checksumPaths.has(normPath)) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Duplicate path found in checksum entries: ${path}`
+        };
+      }
+      checksumPaths.add(normPath);
+      checksumMap.set(normPath, hash);
+    }
+
+    if (checksumPaths.size !== exportResult.exportedFiles.length) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Mismatch between number of checksum entries and number of exported files.'
+      };
+    }
+
+    for (const file of exportResult.exportedFiles) {
+      const normPath = normalizePath(file.path);
+      if (!checksumMap.has(normPath)) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `File missing from checksum list: ${file.path}`
+        };
+      }
+      const calculatedHash = sha256(file.content).toLowerCase();
+      const declaredHash = checksumMap.get(normPath);
+      if (calculatedHash !== declaredHash) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'FAIL',
+          passed: false,
+          score: 0,
+          details: `Checksum mismatch for file ${file.path}: calculated ${calculatedHash}, declared ${declaredHash}`
+        };
+      }
+    }
+
+    // Require validationGatesPassed non-null object
+    if (!exportResult.validationGatesPassed || typeof exportResult.validationGatesPassed !== 'object') {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Export package validationGatesPassed is missing or invalid.'
+      };
+    }
+
+    const requiredGates = [
+      'workspace',
+      'integrity',
+      'dependencies',
+      'compiler',
+      'security',
+      'deployment',
+      'architecture',
+      'testing',
+      'documentation'
+    ];
+
+    for (const gate of requiredGates) {
+      if (!(gate in exportResult.validationGatesPassed) || exportResult.validationGatesPassed[gate] === undefined) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Export package validation gate evidence incomplete: missing required gate '${gate}' (NOT_VERIFIED).`
+        };
+      }
+
+      const value = exportResult.validationGatesPassed[gate];
+      if (typeof value !== 'boolean') {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Export package validation gate '${gate}' value is not a boolean (NOT_VERIFIED).`
+        };
+      }
+
+      if (value === false) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'FAIL',
+          passed: false,
+          score: 0,
+          details: `Export package validation gate failed: '${gate}' is false.`
+        };
+      }
+    }
+
+    // 3. VALIDATION GATE SUMMARY MUST MATCH AUTHORITATIVE GATES
+    if (authoritativeGates) {
+      for (const gate of requiredGates) {
+        const authGate = authoritativeGates[gate];
+        const authPassed = authGate && authGate.status === 'PASS';
+        const summaryPassed = exportResult.validationGatesPassed[gate];
+
+        if (summaryPassed === true && !authPassed) {
+          const authStatus = authGate ? authGate.status : 'NOT_VERIFIED';
+          if (authStatus === 'FAIL') {
+            return {
+              name: 'Export Certification Engine',
+              status: 'FAIL',
+              passed: false,
+              score: 0,
+              details: `Authoritative gate '${gate}' failed, but export summary claimed it passed.`
+            };
+          } else {
+            return {
+              name: 'Export Certification Engine',
+              status: 'NOT_VERIFIED',
+              passed: false,
+              score: 0,
+              details: `Authoritative gate '${gate}' is ${authStatus}, but export summary claimed it passed.`
+            };
+          }
+        }
+      }
+    }
+
     return {
       name: 'Export Certification Engine',
-      passed,
-      score: passed ? 100 : 0,
-      details: passed ? 'Export package certified with SHA256 checksums, manifest, and delivery summary.' : 'Export gate failed: incomplete package metadata.'
+      status: 'PASS',
+      passed: true,
+      score: 100,
+      details: 'Export package certified.'
     };
   }
 
-  /**
-   * Collect all 11 gate validation results
-   */
-  public static collectValidationResults(
-    files: ProjectFile[],
-    projectName: string,
-    prompt: string,
-    blockchain: string
-  ): ValidationCollectorResults {
-    return {
-      workspace: this.collectWorkspaceStatus(files),
-      integrity: this.collectProjectIntegrityStatus(files),
-      dependencies: this.collectDependencyStatus(files),
-      compiler: this.collectCompilerResults(files, blockchain),
-      copilot: this.collectCopilotResults(files),
-      security: this.collectSecurityResults(files, blockchain),
-      deployment: this.collectDeploymentResults(files, blockchain),
-      architecture: this.collectArchitectureResults(files, prompt, blockchain),
-      testing: this.collectTestingResults(files, blockchain),
-      documentation: this.collectDocumentationResults(files),
-      exportGate: this.collectExportResults(files, projectName, prompt, blockchain)
-    };
-  }
-
-  /**
-   * Calculate Certification Score (Weighted 0-100)
-   */
   public static calculateCertificationScore(gates: ValidationCollectorResults): number {
     const gateList = Object.values(gates);
-    const totalScore = gateList.reduce((acc, g) => acc + g.score, 0);
-    return Math.round(totalScore / gateList.length);
+    const passedCount = gateList.filter(g => g.status === 'PASS').length;
+    return Math.round((passedCount / gateList.length) * 100);
   }
 
-  /**
-   * Calculate Overall Grade (A+, A, B, C, D, F)
-   * Rule: Cannot assign A+ if any required validation gate failed.
-   */
   public static calculateOverallGrade(
     score: number,
     allGatesPassed: boolean
   ): 'A+' | 'A' | 'B' | 'C' | 'D' | 'F' {
     if (!allGatesPassed) {
-      if (score >= 80) return 'B';
-      if (score >= 70) return 'C';
-      if (score >= 60) return 'D';
       return 'F';
     }
-
     if (score >= 97) return 'A+';
     if (score >= 90) return 'A';
     if (score >= 80) return 'B';
@@ -302,39 +949,34 @@ export class EngineeringCertificationEngine {
     return 'F';
   }
 
-  /**
-   * Generate Executive Summary
-   */
   public static generateExecutiveSummary(
     projectName: string,
     certificationId: string,
     score: number,
     grade: string,
-    isCertified: boolean
+    status: 'CERTIFIED' | 'FAILED' | 'NOT_VERIFIED',
+    evidence: any
   ): string {
     return `# Executive Certification Summary for ${projectName}
 
 **Certification ID:** ${certificationId}
 **Overall Engineering Grade:** ${grade} (Certification Score: ${score}/100)
-**Client Delivery Status:** ${isCertified ? '✅ CERTIFIED & APPROVED FOR CLIENT DELIVERY' : '❌ BLOCKED - GATES FAILED'}
+**Certification Status:** ${status}
+**Client Delivery Status:** ${status === 'CERTIFIED' ? '✅ CERTIFIED & APPROVED FOR CLIENT DELIVERY' : status === 'FAILED' ? '❌ BLOCKED - GATES FAILED' : '⚠️ BLOCKED - EVIDENCE MISSING OR UNVERIFIED'}
 **Timestamp:** ${new Date().toISOString()}
 
-The **${projectName}** smart contract codebase has completed the full 12-Sprint Enterprise Verification Pipeline. Every artifact, test suite, audit report, deployment runbook, and visual diagram has been cryptographically cataloged and certified against enterprise release standards.
+## Execution Evidence Summary
+- Workspace ID: ${evidence.workspaceId}
+- Compiler Evidence: ${evidence.compilerExitStatus}
+- Test Execution Evidence: ${evidence.testExitStatus}
+- Security Audit Evidence: ${evidence.auditResults}
 `;
   }
 
-  /**
-   * Generate Evidence Manifest (EVIDENCE_MANIFEST.json)
-   */
   public static generateEvidenceManifest(
     files: ProjectFile[],
     certData: CertificationData
   ): string {
-    const reportFiles = files.filter(f => f.path.includes('report') || f.path.endsWith('.md')).map(f => f.path);
-    const docFiles = files.filter(f => f.path.endsWith('.md')).map(f => f.path);
-
-    const computeSha256 = (content: string) => sha256(content);
-
     const manifest = {
       certificationId: certData.certificationId,
       projectId: certData.projectId,
@@ -343,13 +985,14 @@ The **${projectName}** smart contract codebase has completed the full 12-Sprint 
       overallGrade: certData.overallGrade,
       certificationScore: certData.certificationScore,
       clientDeliveryStatus: certData.clientDeliveryStatus,
-      engineVersions: certData.engineVersions,
+      compiler: certData.compiler,
+      framework: certData.framework,
+      language: certData.language,
       validationTimeline: certData.validationTimeline,
       gatesStatus: certData.gates,
-      reports: reportFiles,
-      documentation: docFiles,
+      executionEvidence: certData.executionEvidence,
       fileChecksums: files.reduce((acc, f) => {
-        acc[f.path] = computeSha256(f.content);
+        acc[f.path] = sha256(f.content);
         return acc;
       }, {} as Record<string, string>)
     };
@@ -357,9 +1000,6 @@ The **${projectName}** smart contract codebase has completed the full 12-Sprint 
     return JSON.stringify(manifest, null, 2);
   }
 
-  /**
-   * Generate Engineering Certificate (ENGINEERING_CERTIFICATION.md)
-   */
   public static generateEngineeringCertificate(certData: CertificationData): string {
     return `# Enterprise Engineering Certificate of Quality & Release Readiness
 
@@ -369,7 +1009,6 @@ The **${projectName}** smart contract codebase has completed the full 12-Sprint 
 **Generation Timestamp:** ${certData.timestamp}
 **Target Blockchain Network:** ${certData.blockchain}
 **Framework & Compiler:** ${certData.framework} (${certData.compiler})
-**Primary Language:** ${certData.language}
 
 ---
 
@@ -379,97 +1018,41 @@ The **${projectName}** smart contract codebase has completed the full 12-Sprint 
 | :--- | :--- |
 | **Overall Engineering Grade** | **${certData.overallGrade}** |
 | **Certification Score** | **${certData.certificationScore} / 100** |
-| **Quality Score** | **${certData.qualityScore} / 100** |
-| **Architecture Score** | **${certData.architectureScore} / 100** |
-| **Security Score** | **${certData.securityScore} / 100** |
-| **Testing Score** | **${certData.testingScore} / 100** |
 | **Client Delivery Readiness** | **${certData.clientDeliveryStatus}** |
 
----
-
-## 2. Enterprise Engine System Versions
-\`\`\`
-Workspace Preservation Engine:      ${certData.engineVersions['WorkspaceEngine']}
-Project Integrity Engine:           ${certData.engineVersions['IntegrityEngine']}
-Dependency Validation Engine:       ${certData.engineVersions['DependencyEngine']}
-Compiler Intelligence Engine:       ${certData.engineVersions['CompilerEngine']}
-AI Copilot Intelligence Engine:     ${certData.engineVersions['CopilotEngine']}
-Enterprise Security Engine:         ${certData.engineVersions['SecurityEngine']}
-Deployment Engine:                  ${certData.engineVersions['DeploymentEngine']}
-Smart Contract Generation Engine:   ${certData.engineVersions['GenerationEngine']}
-Architecture Validation Engine:     ${certData.engineVersions['ArchitectureEngine']}
-Testing & QA Engine:                ${certData.engineVersions['TestingEngine']}
-Documentation Engine:               ${certData.engineVersions['DocumentationEngine']}
-Export Certification Engine:        ${certData.engineVersions['ExportEngine']}
-Engineering Certification Engine:  ${certData.engineVersions['CertificationEngine']}
-\`\`\`
+## 2. Real Execution Evidence
+- Workspace ID: ${certData.executionEvidence.workspaceId}
+- Compiler Evidence: ${certData.executionEvidence.compilerExitStatus}
+- Test Execution Evidence: ${certData.executionEvidence.testExitStatus}
+- Security Audit Evidence: ${certData.executionEvidence.auditResults}
 
 ---
 
-## 3. Codebase Inventory & Generated Artifacts
-
-- **Generated Smart Contracts:** ${certData.generatedContractsCount}
-- **Generated Automated Test Suites:** ${certData.generatedTestsCount}
-- **Generated Documentation Runbooks:** ${certData.generatedDocsCount}
-- **Generated Audit & Quality Reports:** ${certData.generatedReportsCount}
-
----
-
-## 4. Comprehensive Validation Gate Matrix
+## 3. Comprehensive Validation Gate Matrix
 
 | Gate Dimension | Status | Score | Verification Detail |
 | :--- | :---: | :---: | :--- |
-| **1. Workspace Preservation** | ${certData.gates.workspace.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.workspace.score}/100 | ${certData.gates.workspace.details} |
-| **2. Project Integrity** | ${certData.gates.integrity.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.integrity.score}/100 | ${certData.gates.integrity.details} |
-| **3. Dependency Validation** | ${certData.gates.dependencies.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.dependencies.score}/100 | ${certData.gates.dependencies.details} |
-| **4. Compiler Intelligence** | ${certData.gates.compiler.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.compiler.score}/100 | ${certData.gates.compiler.details} |
-| **5. AI Copilot Intelligence** | ${certData.gates.copilot.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.copilot.score}/100 | ${certData.gates.copilot.details} |
-| **6. Enterprise Security Audit** | ${certData.gates.security.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.security.score}/100 | ${certData.gates.security.details} |
-| **7. Deployment Readiness** | ${certData.gates.deployment.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.deployment.score}/100 | ${certData.gates.deployment.details} |
-| **8. Architecture Logic Mapping**| ${certData.gates.architecture.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.architecture.score}/100 | ${certData.gates.architecture.details} |
-| **9. Testing & QA Verification** | ${certData.gates.testing.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.testing.score}/100 | ${certData.gates.testing.details} |
-| **10. Documentation Suite** | ${certData.gates.documentation.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.documentation.score}/100 | ${certData.gates.documentation.details} |
-| **11. Export Package Certification**| ${certData.gates.exportGate.passed ? '✅ PASS' : '❌ FAIL'} | ${certData.gates.exportGate.score}/100 | ${certData.gates.exportGate.details} |
+| **1. Workspace Preservation** | ${certData.gates.workspace.status === 'PASS' ? '✅ PASS' : certData.gates.workspace.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.workspace.score}/100 | ${certData.gates.workspace.details} |
+| **2. Project Integrity** | ${certData.gates.integrity.status === 'PASS' ? '✅ PASS' : certData.gates.integrity.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.integrity.score}/100 | ${certData.gates.integrity.details} |
+| **3. Dependency Validation** | ${certData.gates.dependencies.status === 'PASS' ? '✅ PASS' : certData.gates.dependencies.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.dependencies.score}/100 | ${certData.gates.dependencies.details} |
+| **4. Compiler Intelligence** | ${certData.gates.compiler.status === 'PASS' ? '✅ PASS' : certData.gates.compiler.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.compiler.score}/100 | ${certData.gates.compiler.details} |
+| **5. Enterprise Security Audit** | ${certData.gates.security.status === 'PASS' ? '✅ PASS' : certData.gates.security.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.security.score}/100 | ${certData.gates.security.details} |
+| **6. Deployment Readiness** | ${certData.gates.deployment.status === 'PASS' ? '✅ PASS' : certData.gates.deployment.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.deployment.score}/100 | ${certData.gates.deployment.details} |
+| **7. Architecture Logic Mapping**| ${certData.gates.architecture.status === 'PASS' ? '✅ PASS' : certData.gates.architecture.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.architecture.score}/100 | ${certData.gates.architecture.details} |
+| **8. Testing & QA Verification** | ${certData.gates.testing.status === 'PASS' ? '✅ PASS' : certData.gates.testing.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.testing.score}/100 | ${certData.gates.testing.details} |
+| **9. Documentation Suite** | ${certData.gates.documentation.status === 'PASS' ? '✅ PASS' : certData.gates.documentation.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.documentation.score}/100 | ${certData.gates.documentation.details} |
+| **10. Export Package Certification**| ${certData.gates.exportGate.status === 'PASS' ? '✅ PASS' : certData.gates.exportGate.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.exportGate.score}/100 | ${certData.gates.exportGate.details} |
 
 ---
-
-## 5. Verification Timeline & Execution Log
-| Gate | Execution Timestamp | Duration | Status |
-| :--- | :--- | :--- | :---: |
-${certData.validationTimeline.map(t => `| ${t.gate} | ${t.timestamp} | ${t.durationMs}ms | ${t.status === 'PASS' ? '✅ PASS' : '❌ FAIL'} |`).join('\n')}
-
----
-
-## 6. Remaining Warnings & Known Limitations
-
-### Remaining Warnings:
-${certData.remainingWarnings.length > 0 ? certData.remainingWarnings.map(w => `- ⚠️ ${w}`).join('\n') : '- None. Codebase meets all clean delivery standards.'}
-
-### Known Limitations:
-${certData.knownLimitations.map(l => `- ℹ️ ${l}`).join('\n')}
-
----
-
-## 7. Principal Architect Final Recommendation & Sign-Off
-
-**Final Recommendation:** ${certData.finalRecommendation}
-
-**Client Delivery Status:** **${certData.clientDeliveryStatus}**
-
----
-*Certified by AI Studio Enterprise Engineering Certification Engine RC3*
 `;
   }
 
-  /**
-   * Master Certification Entry Point: certifyProject()
-   */
   public static certifyProject(
     files: ProjectFile[],
     projectName: string,
     prompt: string,
     blockchain: string,
-    options?: { projectId?: string; customCertificationId?: string }
+    options?: CertificationOptions
   ): EngineeringCertificationResult {
     if (!files || !Array.isArray(files) || files.length === 0) {
       throw new Error('WORKSPACE_INCOMPLETE: Workspace contains no project files.');
@@ -479,64 +1062,114 @@ ${certData.knownLimitations.map(l => `- ℹ️ ${l}`).join('\n')}
     const certificationId = options?.customCertificationId || this.generateUuid();
     const timestamp = new Date().toISOString();
 
-    // 1. Collect validation gate results
-    const gates = this.collectValidationResults(files, projectName, prompt, blockchain);
+    const compilationResult = options?.compilationResult || options?.evidence?.compilationResult;
+    const testingResult = options?.testingResult || options?.evidence?.testingResult;
+    const securityAuditResult = options?.securityAuditResult || options?.evidence?.securityAuditResult;
+    const dependencyResult = options?.dependencyResult || options?.evidence?.dependencyResult;
+    const architectureResult = options?.architectureResult || options?.evidence?.architectureResult;
+    const documentationResult = options?.documentationResult || options?.evidence?.documentationResult;
+    const deploymentResult = options?.deploymentResult || options?.evidence?.deploymentResult;
+    const exportResult = options?.exportResult || options?.evidence?.exportResult;
 
-    // 2. Check overall pass status across all 11 gates
+    const framework = options?.framework || compilationResult?.framework || 'UNKNOWN';
+    const compiler = compilationResult?.compilerVersion || options?.compilerVersion || 'UNKNOWN';
+    const language = options?.language || (compilationResult as any)?.language || 'UNKNOWN';
+
+    // Collect validation gate results strictly from evidence
+    const gates: ValidationCollectorResults = {
+      workspace: this.collectWorkspaceStatus(files),
+      integrity: this.collectProjectIntegrityStatus(files),
+      dependencies: this.collectDependencyStatus(dependencyResult),
+      compiler: this.collectCompilerResults(compilationResult),
+      security: this.collectSecurityResults(securityAuditResult),
+      deployment: this.collectDeploymentResults(deploymentResult),
+      architecture: this.collectArchitectureResults(architectureResult),
+      testing: this.collectTestingResults(testingResult),
+      documentation: this.collectDocumentationResults(documentationResult),
+      exportGate: { name: 'Export Certification Engine', status: 'NOT_VERIFIED', passed: false, score: 0, details: '' }
+    };
+
+    gates.exportGate = this.collectExportResults(exportResult, gates);
+
     const gateArray = Object.values(gates);
-    const allGatesPassed = gateArray.every(g => g.passed);
 
-    // 3. Scores
-    const qualityScore = 98;
-    const architectureScore = gates.architecture.score;
-    const securityScore = gates.security.score;
-    const testingScore = gates.testing.score;
+    const hasFail = gateArray.some(g => g.status === 'FAIL');
+    const hasNotVerified = gateArray.some(g => g.status === 'NOT_VERIFIED');
+    const allGatesPassed = gateArray.every(g => g.status === 'PASS');
+
+    let status: 'CERTIFIED' | 'FAILED' | 'NOT_VERIFIED';
+    if (allGatesPassed) {
+      status = 'CERTIFIED';
+    } else if (hasFail) {
+      status = 'FAILED';
+    } else {
+      status = 'NOT_VERIFIED';
+    }
+
+    const isCertified = status === 'CERTIFIED';
+
     const score = this.calculateCertificationScore(gates);
     const grade = this.calculateOverallGrade(score, allGatesPassed);
 
-    const isCertified = allGatesPassed;
-
-    // 4. Counts
     const generatedContractsCount = files.filter(f => f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move')).length;
     const generatedTestsCount = files.filter(f => f.path.includes('test') || f.path.includes('spec') || f.path.endsWith('.t.sol')).length;
     const generatedDocsCount = files.filter(f => f.path.endsWith('.md') && !f.path.includes('REPORT')).length;
     const generatedReportsCount = files.filter(f => f.path.includes('REPORT') || f.path.includes('SUMMARY') || f.path.includes('CERTIFICATION')).length;
 
-    // 5. Engine Versions
-    const engineVersions: Record<string, string> = {
-      WorkspaceEngine: 'v1.0.0-rc3',
-      IntegrityEngine: 'v1.0.0-rc3',
-      DependencyEngine: 'v1.0.0-rc3',
-      CompilerEngine: 'v1.0.0-rc3',
-      CopilotEngine: 'v1.0.0-rc3',
-      SecurityEngine: 'v1.0.0-rc3',
-      DeploymentEngine: 'v1.0.0-rc3',
-      GenerationEngine: 'v1.0.0-rc3',
-      ArchitectureEngine: 'v1.0.0-rc3',
-      TestingEngine: 'v1.0.0-rc3',
-      DocumentationEngine: 'v1.0.0-rc3',
-      ExportEngine: 'v1.0.0-rc3',
-      CertificationEngine: 'v1.0.0-rc3'
+    const fileHashes = files.reduce((acc, f) => {
+      acc[f.path] = sha256(f.content);
+      return acc;
+    }, {} as Record<string, string>);
+
+    const compilerExitStatus = compilationResult && typeof compilationResult.exitCode === 'number'
+      ? `${compilationResult.exitCode} (${compilationResult.exitCode === 0 ? 'SUCCESS' : 'FAILED'})`
+      : 'UNKNOWN';
+
+    const testExitStatus = testingResult && typeof testingResult.exitStatus === 'number'
+      ? `${testingResult.exitStatus} (${testingResult.exitStatus === 0 ? 'SUCCESS' : 'FAILED'})`
+      : 'UNKNOWN';
+
+    const testCommand = testingResult?.evidence?.command
+      ? testingResult.evidence.command
+      : 'UNKNOWN';
+
+    const executionEvidence = {
+      timestamp,
+      workspaceId: projectId,
+      filesInspected: files.length,
+      compilerUsed: compiler,
+      compilerVersion: compiler,
+      compilerExitStatus,
+      testCommand,
+      testExitStatus,
+      auditResults: securityAuditResult ? `${securityAuditResult.criticalCount ?? 0} Critical, ${securityAuditResult.highCount ?? 0} High, ${securityAuditResult.mediumCount ?? 0} Medium` : 'NOT_VERIFIED',
+      finalFileHashes: fileHashes
     };
 
-    // 6. Validation Timeline
-    const validationTimeline = [
-      { gate: 'Workspace Preservation Engine', timestamp, durationMs: 12, status: (gates.workspace.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' },
-      { gate: 'Project Integrity Engine', timestamp, durationMs: 15, status: (gates.integrity.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' },
-      { gate: 'Dependency Validation Engine', timestamp, durationMs: 18, status: (gates.dependencies.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' },
-      { gate: 'Compiler Intelligence Engine', timestamp, durationMs: 45, status: (gates.compiler.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' },
-      { gate: 'AI Copilot Intelligence Engine', timestamp, durationMs: 20, status: (gates.copilot.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' },
-      { gate: 'Enterprise Security Engine', timestamp, durationMs: 85, status: (gates.security.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' },
-      { gate: 'Deployment Engine', timestamp, durationMs: 32, status: (gates.deployment.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' },
-      { gate: 'Architecture Validation Engine', timestamp, durationMs: 40, status: (gates.architecture.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' },
-      { gate: 'Testing & QA Engine', timestamp, durationMs: 90, status: (gates.testing.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' },
-      { gate: 'Documentation Engine', timestamp, durationMs: 50, status: (gates.documentation.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' },
-      { gate: 'Export Certification Engine', timestamp, durationMs: 25, status: (gates.exportGate.passed ? 'PASS' : 'FAIL') as 'PASS' | 'FAIL' }
-    ];
+    const engineVersions: Record<string, string> = {
+      CompilerEngine: 'v1.0.0',
+      TestingEngine: 'v1.0.0',
+      SecurityEngine: 'v1.0.0',
+      CertificationEngine: 'v1.0.0'
+    };
 
-    const framework = blockchain.includes('Solana') ? 'Anchor 0.29' : blockchain.includes('Aptos') || blockchain.includes('Sui') ? 'Move Framework 1.1' : 'Foundry 0.2.0';
-    const compiler = blockchain.includes('Solana') ? 'rustc 1.75' : blockchain.includes('Aptos') || blockchain.includes('Sui') ? 'move-cli 3.0' : 'solc 0.8.20';
-    const language = blockchain.includes('Solana') ? 'Rust' : blockchain.includes('Aptos') || blockchain.includes('Sui') ? 'Move' : 'Solidity';
+    const validationTimeline = gateArray.map(g => ({
+      gate: g.name,
+      timestamp,
+      durationMs: (
+        g.name.includes('Compiler') ? (compilationResult?.durationMs ?? null) :
+        g.name.includes('Testing') ? (testingResult?.evidence?.durationMs ?? null) :
+        g.name.includes('Security') ? ((securityAuditResult as any)?.analysisDurationMs ?? null) :
+        null
+      ),
+      status: g.status
+    }));
+
+    const clientDeliveryStatus = isCertified
+      ? 'CERTIFIED & APPROVED FOR CLIENT DELIVERY'
+      : hasFail
+      ? 'BLOCKED - GATES FAILED'
+      : 'BLOCKED - EVIDENCE MISSING OR UNVERIFIED';
 
     const certData: CertificationData = {
       projectName,
@@ -554,73 +1187,45 @@ ${certData.knownLimitations.map(l => `- ℹ️ ${l}`).join('\n')}
       generatedReportsCount,
       validationTimeline,
       gates,
-      qualityScore,
-      architectureScore,
-      securityScore,
-      testingScore,
       certificationScore: score,
       overallGrade: grade,
-      remainingWarnings: [],
-      knownLimitations: [
-        'Mainnet deployment requires multi-sig admin keys setup.',
-        'External oracle feeds require Chainlink subscription on target network.'
-      ],
       finalRecommendation: isCertified
         ? `Codebase is 100% compliant with enterprise standards. Approved for production deployment and client delivery.`
-        : `Certification blocked due to failed validation gates. Resolve all gate failures prior to client delivery.`,
-      clientDeliveryStatus: isCertified
-        ? 'CERTIFIED & APPROVED FOR CLIENT DELIVERY'
-        : 'BLOCKED - GATES FAILED'
+        : `Certification blocked (${status}). Resolve all gate failures / missing evidence prior to client delivery.`,
+      clientDeliveryStatus,
+      executionEvidence
     };
 
-    // 7. Generate certificate and evidence manifest
     const certificateMd = this.generateEngineeringCertificate(certData);
     const evidenceManifestJson = this.generateEvidenceManifest(files, certData);
-    const executiveSummary = this.generateExecutiveSummary(projectName, certificationId, score, grade, isCertified);
+    const executiveSummary = this.generateExecutiveSummary(projectName, certificationId, score, grade, status, executionEvidence);
 
-    // 8. Prepare trace-certified files
-    // Inject Traceability Metadata into all markdown reports
-    const traceHeader = `<!-- TRACEABILITY METADATA -->
-> **Certification ID:** \`${certificationId}\` | **Project ID:** \`${projectId}\` | **Version:** \`v1.0.0-rc3\` | **Timestamp:** \`${timestamp}\`
+    // Filter client deliverable files (exclude internal diagnostics)
+    const certifiedFiles = files.filter(f => !f.path.startsWith('.diagnostics/'));
 
-`;
+    const internalDiagnostics: ProjectFile[] = [
+      { path: '.diagnostics/ENGINEERING_CERTIFICATION.md', content: certificateMd, language: 'markdown' },
+      { path: '.diagnostics/EVIDENCE_MANIFEST.json', content: evidenceManifestJson, language: 'json' }
+    ];
 
-    let certifiedFiles = files.map(f => {
-      if (f.path.endsWith('.md') && !f.content.includes('Certification ID:')) {
-        return {
-          ...f,
-          content: traceHeader + f.content
-        };
-      }
-      return f;
-    });
-
-    // Ensure ENGINEERING_CERTIFICATION.md is present
-    const certPathIdx = certifiedFiles.findIndex(f => f.path.toUpperCase() === 'ENGINEERING_CERTIFICATION.MD');
-    if (certPathIdx >= 0) {
-      certifiedFiles[certPathIdx] = { path: 'ENGINEERING_CERTIFICATION.md', content: certificateMd, language: 'markdown' };
-    } else {
-      certifiedFiles.push({ path: 'ENGINEERING_CERTIFICATION.md', content: certificateMd, language: 'markdown' });
-    }
-
-    // Ensure EVIDENCE_MANIFEST.json is present
-    const evPathIdx = certifiedFiles.findIndex(f => f.path.toUpperCase() === 'EVIDENCE_MANIFEST.JSON');
-    if (evPathIdx >= 0) {
-      certifiedFiles[evPathIdx] = { path: 'EVIDENCE_MANIFEST.json', content: evidenceManifestJson, language: 'json' };
-    } else {
-      certifiedFiles.push({ path: 'EVIDENCE_MANIFEST.json', content: evidenceManifestJson, language: 'json' });
-    }
+    const artifacts: CertificationArtifacts = {
+      projectFiles: certifiedFiles,
+      internalDiagnostics
+    };
 
     const issues: string[] = [];
     gateArray.forEach(g => {
-      if (!g.passed) {
-        issues.push(`${g.name} Failed: ${g.details}`);
+      if (g.status !== 'PASS') {
+        issues.push(`${g.name} [${g.status}]: ${g.details}`);
       }
     });
 
     return {
       isCertified,
+      status,
       certifiedFiles,
+      internalDiagnostics,
+      artifacts,
       certificateMd,
       evidenceManifestJson,
       certificationId,
@@ -632,9 +1237,6 @@ ${certData.knownLimitations.map(l => `- ℹ️ ${l}`).join('\n')}
     };
   }
 
-  /**
-   * Alias for certifyProject
-   */
   public static certify(
     files: ProjectFile[],
     projectName: string = 'SmartContractProject',
@@ -642,14 +1244,11 @@ ${certData.knownLimitations.map(l => `- ℹ️ ${l}`).join('\n')}
     prompt: string = ''
   ) {
     if (!Array.isArray(files)) throw new Error("EngineeringCertificationEngine.certify: files must be an array");
-    const cert = this.certifyProject(files, projectName, blockchain, prompt);
+    const cert = this.certifyProject(files, projectName, prompt, blockchain);
     if (!cert || !cert.certifiedFiles) throw new Error("EngineeringCertificationEngine returned invalid result");
     return cert;
   }
 
-  /**
-   * Alias for certifyProject
-   */
   public static finalizeCertification(
     files: ProjectFile[],
     projectName: string = 'SmartContractProject',

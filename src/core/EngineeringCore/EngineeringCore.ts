@@ -1,4 +1,5 @@
 import { UniversalPipeline, PipelineExecutionOptions } from './pipeline/UniversalPipeline';
+import { AuthoritativePipelineRouter } from './pipeline/AuthoritativePipelineRouter';
 import { IntentAnalyzer } from './analyzers/IntentAnalyzer';
 import { RequirementAnalyzer } from './analyzers/RequirementAnalyzer';
 import { EngineeringReviewer } from './reviewers/EngineeringReviewer';
@@ -18,10 +19,31 @@ export class EngineeringCoreEngine {
   }
 
   /**
-   * Universal generation pipeline execution
+   * Universal generation pipeline execution via AuthoritativePipelineRouter
    */
   public async generateProject(options: PipelineExecutionOptions): Promise<StructuredProjectOutput> {
-    return UniversalPipeline.execute(options);
+    return AuthoritativePipelineRouter.generate(options);
+  }
+
+  /**
+   * Authoritative compilation analysis
+   */
+  public async compileProject(project: StructuredProjectOutput): Promise<any> {
+    return AuthoritativePipelineRouter.compile(project);
+  }
+
+  /**
+   * Authoritative security audit
+   */
+  public async auditProject(project: StructuredProjectOutput): Promise<any> {
+    return AuthoritativePipelineRouter.audit(project);
+  }
+
+  /**
+   * Authoritative deployment prep
+   */
+  public async deployProject(project: StructuredProjectOutput, wallet?: any, network?: any): Promise<any> {
+    return AuthoritativePipelineRouter.deploy(project, wallet, network);
   }
 
   /**

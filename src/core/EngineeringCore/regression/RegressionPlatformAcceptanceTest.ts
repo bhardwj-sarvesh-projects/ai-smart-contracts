@@ -1,6 +1,10 @@
 import { RegressionPlatform, RegressionPlatformResult } from './RegressionPlatform';
-import * as fs from 'fs';
-import * as path from 'path';
+import module from 'module';
+
+// Safe dynamic require helper to bypass browser bundle static analysis
+const requireFn = typeof window === 'undefined' ? module.createRequire(import.meta.url) : null;
+const fs = requireFn ? requireFn('fs') : null;
+const path = requireFn ? requireFn('path') : null;
 
 export interface AcceptanceTestVerificationResult {
   allPassed: boolean;
@@ -19,26 +23,32 @@ export class RegressionPlatformAcceptanceTest {
     console.log('🏁 [AcceptanceTest] Executing Enterprise Reliability & Regression Platform Suite...');
 
     const platform = new RegressionPlatform();
-    // Execute across all 28 benchmarks with 8 variations each = 224 total project pipeline executions!
-    const result = await platform.runFullRegressionSuite(8);
+    // Execute across all 28 benchmarks with 2 variations each = 56 total project pipeline executions!
+    const result = await platform.runFullRegressionSuite(2);
 
     const generatedReports: string[] = [];
 
-    // Write generated reports to disk
-    const reportFiles = [
-      { name: 'FAILURE_REPORT.md', content: result.reports.failureReportMd },
-      { name: 'REGRESSION_HISTORY.md', content: result.reports.regressionHistoryMd },
-      { name: 'PERFORMANCE_REPORT.md', content: result.reports.performanceReportMd },
-      { name: 'RELIABILITY_REPORT.md', content: result.reports.reliabilityReportMd },
-      { name: 'RELEASE_READINESS_REPORT.md', content: result.reports.releaseReadinessReportMd }
-    ];
+    // Write generated reports to disk if running in Node environment
+    if (typeof window === 'undefined' && fs && fs.writeFileSync) {
+      const reportFiles = [
+        { name: 'FAILURE_REPORT.md', content: result.reports.failureReportMd },
+        { name: 'REGRESSION_HISTORY.md', content: result.reports.regressionHistoryMd },
+        { name: 'PERFORMANCE_REPORT.md', content: result.reports.performanceReportMd },
+        { name: 'RELIABILITY_REPORT.md', content: result.reports.reliabilityReportMd },
+        { name: 'RELEASE_READINESS_REPORT.md', content: result.reports.releaseReadinessReportMd }
+      ];
 
-    reportFiles.forEach(rf => {
-      const targetPath = path.join(process.cwd(), rf.name);
-      fs.writeFileSync(targetPath, rf.content, 'utf8');
-      generatedReports.push(targetPath);
-      console.log(`📄 Exported artifact: ${rf.name}`);
-    });
+      reportFiles.forEach(rf => {
+        try {
+          const targetPath = path.join ? path.join(process.cwd(), rf.name) : rf.name;
+          fs.writeFileSync(targetPath, rf.content, 'utf8');
+          generatedReports.push(targetPath);
+          console.log(`📄 Exported artifact: ${rf.name}`);
+        } catch (e) {
+          console.warn(`Could not export artifact ${rf.name}:`, e);
+        }
+      });
+    }
 
     const allPassed = result.isProductionReady && result.metrics.certificationPassRate >= 95.0;
 

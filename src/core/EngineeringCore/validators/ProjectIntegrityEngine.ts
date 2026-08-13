@@ -300,134 +300,11 @@ export class ProjectIntegrityEngine {
     framework: string = 'foundry',
     language: string = 'solidity'
   ): { repairedFiles: ProjectFile[]; repairsMade: string[]; generatedAssets: string[] } {
-    const repairedFiles = [...files];
-    const repairsMade: string[] = [];
-    const generatedAssets: string[] = [];
-
-    const existingNorms = new Set(repairedFiles.map(f => PatchEngine.normalizePath(f.path).toLowerCase()));
-
-    const addFile = (path: string, content: string, lang: string = 'markdown') => {
-      const norm = PatchEngine.normalizePath(path).toLowerCase();
-      if (!existingNorms.has(norm)) {
-        repairedFiles.push({ path, content: content.trim(), language: lang });
-        existingNorms.add(norm);
-        repairsMade.push(`Generated missing asset: ${path}`);
-        generatedAssets.push(path);
-      }
-    };
-
-    const name = projectName || 'SmartContractProject';
-
-    // 1. Mandatory Documents
-    addFile('README.md', `# ${name}\n\nEnterprise smart contract suite generated and certified by AI Contracts v1.0.\n\n## Overview\nThis repository contains production-ready smart contracts, interfaces, deployment scripts, unit tests, and security audit reports.\n\n## Structure\n- \`contracts/\`: Primary smart contract implementations\n- \`interfaces/\`: Contract interface definitions\n- \`libraries/\`: Shared utility libraries\n- \`scripts/\`: Automated deployment scripts\n- \`test/\`: Comprehensive unit test suite\n- \`artifacts/\`: Compilation build artifacts\n- \`reports/\`: Security audit reports and threat models\n\n## Quick Start\n\`\`\`bash\nnpm install\nnpm test\n\`\`\``);
-
-    addFile('ARCHITECTURE.md', `# System Architecture: ${name}\n\n## Overview\nHigh-level architectural specification, storage layouts, permission models, and module boundaries for ${name}.\n\n## Security & Access Control\n- Owner & Role-based Access Control (RBAC)\n- Checks-Effects-Interactions (CEI) Pattern\n- Custom Reentrancy Guards & Safe ERC20 Transfers\n\n## Integration Guidelines\nAll external integrations interact through defined interfaces in \`interfaces/\`.`);
-
-    addFile('SECURITY.md', `# Security Policy: ${name}\n\n## Threat Model & Security Controls\nThis smart contract system implements multi-layered security controls:\n1. State Validation & Custom Errors\n2. Reentrancy Protection\n3. Zero-Address Checks\n4. Strict Role-based Modifiers\n\n## Reporting Vulnerabilities\nPlease disclose security issues responsibly to security@aicontracts.io.`);
-
-    addFile('DEPLOYMENT.md', `# Deployment Guide: ${name}\n\n## Prerequisites\n- Node.js >= 18.0.0\n- Hardhat / Foundry toolchain\n- RPC Endpoint & Private Key in \`.env\`\n\n## Instructions\n1. Configure \`.env\` using \`.env.example\`\n2. Execute deployment script in \`scripts/\`\n3. Verify contract on Etherscan / Explorer`);
-
-    addFile('CHANGELOG.md', `# Changelog: ${name}\n\nAll notable changes to ${name} will be documented in this file.\n\n## [1.0.0] - ${new Date().toISOString().split('T')[0]}\n- Initial mainnet-ready architecture release\n- Integrated unit tests and security audit suite`);
-
-    addFile('LICENSE', `MIT License\n\nCopyright (c) ${new Date().getFullYear()} ${name}\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software...`, 'text');
-
-    addFile('.env.example', `# Environment Variables Template\nPRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000\nRPC_URL=https://mainnet.infura.io/v3/YOUR_KEY\nETHERSCAN_API_KEY=YOUR_ETHERSCAN_KEY`, 'plaintext');
-
-    addFile('reports/SECURITY_REPORT.md', `# Security Audit Report: ${name}\n\n## Executive Summary\nAutomated security audit and formal analysis completed for ${name}.\n\n- Security Score: 95/100\n- Code Quality: 95/100\n- Gas Efficiency: 90/100\n- Reentrancy Guards: Verified\n- Access Control: Verified`);
-
-    addFile('docs/API_REFERENCE.md', `# API Reference & Interface Documentation: ${name}\n\nDetailed function signatures, state mutations, custom errors, and event definitions.`);
-
-    // 2. Ecosystem Specific Configs & Scripts & Tests
-    if (ecosystem === 'evm') {
-      addFile('package.json', JSON.stringify({
-        name: name.toLowerCase().replace(/\s+/g, '-'),
-        version: '1.0.0',
-        description: `${name} Enterprise Smart Contracts`,
-        main: 'index.js',
-        scripts: {
-          test: 'hardhat test',
-          compile: 'hardhat compile',
-          deploy: 'ts-node scripts/deploy.ts'
-        },
-        devDependencies: {
-          '@nomicfoundation/hardhat-toolbox': '^3.0.0',
-          '@openzeppelin/contracts': '^4.9.3',
-          'hardhat': '^2.17.1',
-          'typescript': '^5.1.6'
-        }
-      }, null, 2), 'json');
-
-      addFile('foundry.toml', `[profile.default]\nsrc = "contracts"\nout = "out"\nlibs = ["lib"]\nsolc = "0.8.20"\noptimizer = true\noptimizer_runs = 200`, 'toml');
-
-      addFile('hardhat.config.ts', `import { HardhatUserConfig } from "hardhat/config";\nimport "@nomicfoundation/hardhat-toolbox";\n\nconst config: HardhatUserConfig = {\n  solidity: {\n    version: "0.8.20",\n    settings: {\n      optimizer: {\n        enabled: true,\n        runs: 200\n      }\n    }\n  }\n};\n\nexport default config;`, 'typescript');
-
-      // Interfaces
-      addFile('interfaces/IERC20.sol', `// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\ninterface IERC20 {\n    function totalSupply() external view returns (uint256);\n    function balanceOf(address account) external view returns (uint256);\n    function transfer(address recipient, uint256 amount) external returns (bool);\n    function allowance(address owner, address spender) external view returns (uint256);\n    function approve(address spender, uint256 amount) external returns (bool);\n    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);\n}`, 'solidity');
-
-      // Libraries
-      addFile('libraries/SafeMath.sol', `// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\nlibrary SafeMath {\n    function add(uint256 a, uint256 b) internal pure returns (uint256) {\n        return a + b;\n    }\n    function sub(uint256 a, uint256 b) internal pure returns (uint256) {\n        return a - b;\n    }\n}`, 'solidity');
-
-      // Scripts
-      addFile('scripts/deploy.ts', `import { ethers } from "hardhat";\n\nasync function main() {\n  console.log("Deploying ${name}...");\n  const Factory = await ethers.getContractFactory("Contract");\n  // Deploy script placeholder\n  console.log("${name} deployment script executed successfully.");\n}\n\nmain().catch((error) => {\n  console.error(error);\n  process.exitCode = 1;\n});`, 'typescript');
-
-      // Tests
-      addFile('test/Contract.test.ts', `import { expect } from "chai";\nimport { ethers } from "hardhat";\n\ndescribe("${name} Unit Tests", function () {\n  it("Should deploy and initialize correctly", async function () {\n    expect(true).to.equal(true);\n  });\n});`, 'typescript');
-
-      addFile('artifacts/build-info.json', JSON.stringify({ timestamp: new Date().toISOString(), compiler: "solc-0.8.20" }, null, 2), 'json');
-
-    } else if (ecosystem === 'solana') {
-      addFile('Anchor.toml', `[features]\nseeds = true\nskip-lint = false\n[programs.localnet]\n${name.toLowerCase()} = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"\n\n[registry]\nurl = "https://api.apr.dev"\n\n[provider]\ncluster = "Localnet"\nwallet = "~/.config/solana/id.json"`, 'toml');
-
-      addFile('Cargo.toml', `[package]\nname = "${name.toLowerCase().replace(/\s+/g, '-')}"\nversion = "0.1.0"\ndescription = "Created with Anchor"\nedition = "2021"\n\n[lib]\ncrate-type = ["cdylib", "lib"]\nname = "${name.toLowerCase().replace(/\s+/g, '_')}"\n\n[dependencies]\nanchor-lang = "0.28.0"`, 'toml');
-
-      addFile('tests/anchor.ts', `import * as anchor from "@coral-xyz/anchor";\nimport { Program } from "@coral-xyz/anchor";\n\ndescribe("${name} Solana Tests", () => {\n  anchor.setProvider(anchor.AnchorProvider.env());\n  it("Is initialized!", async () => {\n    // Solana test placeholder\n  });\n});`, 'typescript');
-
-      addFile('migrations/deploy.ts', `const anchor = require("@coral-xyz/anchor");\n\nmodule.exports = async function (provider) {\n  anchor.setProvider(provider);\n};`, 'typescript');
-
-      addFile('app/index.ts', `// Client SDK export for ${name}`, 'typescript');
-
-    } else if (ecosystem === 'move') {
-      addFile('Move.toml', `[package]\nname = "${name}"\nversion = "1.0.0"\n\n[dependencies]\nAptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework", rev = "main" }\n\n[addresses]\n${name.toLowerCase()} = "_"`, 'toml');
-
-      addFile('scripts/deploy.sh', `#!/usr/bin/env bash\naptos move publish --named-addresses ${name.toLowerCase()}=default`, 'shell');
-
-      addFile('tests/move_test.move', `#[test_only]\nmodule ${name.toLowerCase()}::move_test {\n    #[test]\n    fun test_init() {\n        assert!(true, 0);\n    }\n}`, 'move');
-    }
-
-    // Fix any broken relative Solidity imports by generating stubs
-    repairedFiles.forEach(file => {
-      if (file.path.endsWith('.sol')) {
-        const importRegex = /import\s+(?:(?:\{[^}]*\}|\*)\s+from\s+)?["']([^"']+)["']/g;
-        let match: RegExpExecArray | null;
-        while ((match = importRegex.exec(file.content)) !== null) {
-          const importPath = match[1];
-          if (importPath.startsWith('.')) {
-            const currentDir = file.path.substring(0, file.path.lastIndexOf('/'));
-            const parts = (currentDir + '/' + importPath).split('/');
-            const resolvedStack: string[] = [];
-            for (const part of parts) {
-              if (part === '.' || part === '') continue;
-              if (part === '..') {
-                resolvedStack.pop();
-              } else {
-                resolvedStack.push(part);
-              }
-            }
-            const resolvedPath = resolvedStack.join('/');
-            const targetPath = resolvedPath.endsWith('.sol') ? resolvedPath : resolvedPath + '.sol';
-            if (!existingNorms.has(targetPath.toLowerCase())) {
-              addFile(targetPath, `// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\n// Auto-generated interface/module stub for ${importPath}\ninterface ${targetPath.substring(targetPath.lastIndexOf('/') + 1, targetPath.indexOf('.sol'))} {\n    // Interface definitions\n}`, 'solidity');
-              repairsMade.push(`Generated import target stub: ${targetPath}`);
-            }
-          }
-        }
-      }
-    });
-
+    // ProjectIntegrityEngine is a validator, not a project generator (Bug 6). It must NEVER invent files.
     return {
-      repairedFiles,
-      repairsMade,
-      generatedAssets
+      repairedFiles: files,
+      repairsMade: [],
+      generatedAssets: []
     };
   }
 
@@ -494,6 +371,80 @@ This smart contract workspace is **CERTIFIED COMPILER READY** for deployment, au
   }
 
   /**
+   * Active workspace scanner for JSON leakages, provider errors, and ENV/secret leakages
+   */
+  public static validateWorkspaceLeakages(files: ProjectFile[]): IntegrityCheckResult {
+    const details: string[] = [];
+    let passed = true;
+
+    files.forEach(f => {
+      const p = f.path.toLowerCase();
+      const content = f.content || '';
+
+      // Only scan source files (EVM/Solidity, Rust, Move)
+      if (p.endsWith('.sol') || p.endsWith('.rs') || p.endsWith('.move')) {
+        // 1. JSON leakage detection
+        if (content.includes('{"') && content.includes('":') && (content.includes('compiler') || content.includes('diagnostics') || content.includes('errors'))) {
+          passed = false;
+          details.push(`Detected compiler/diagnostics JSON leakage inside source file: ${f.path}`);
+        }
+
+        // 2. Secret/ENV leakage detection
+        const envSecretPattern = /(?:PRIVATE_KEY|API_KEY|INFURA|ALCHEMY|MNEMONIC)\s*=\s*['"]?[a-zA-Z0-9_]{16,}/i;
+        if (envSecretPattern.test(content)) {
+          passed = false;
+          details.push(`Detected private key, API key, or ENV configuration leakage inside source file: ${f.path}`);
+        }
+
+        // 3. Provider error patterns
+        if (content.includes('provider error') || content.includes('invalid RPC') || content.includes('cannot connect to provider')) {
+          passed = false;
+          details.push(`Detected raw provider error reference or unhandled RPC failure pattern in source: ${f.path}`);
+        }
+      }
+
+      // Check for raw compiler reports saved as source files
+      if (p.endsWith('.sol') && (content.trim().startsWith('{') || content.trim().startsWith('['))) {
+        passed = false;
+        details.push(`Source file ${f.path} is a raw JSON payload, not a valid Solidity contract.`);
+      }
+    });
+
+    return {
+      category: 'Workspace Leakage & Secret Sanitization',
+      passed,
+      message: passed ? 'No JSON leakages, provider errors, or ENV/TOML secret leakages detected.' : 'Detected workspace leakages or unescaped secrets in source files.',
+      details
+    };
+  }
+
+  public static validateWorkspaceIntegrity(
+    files: ProjectFile[],
+    projectProfile?: any
+  ): { isValid: boolean; errors: string[]; warnings: string[] } {
+    const projectName = projectProfile?.projectName || 'SmartContractProject';
+    const blockchain = projectProfile?.blockchain;
+    const language = projectProfile?.primaryLanguage;
+    const framework = projectProfile?.targetFramework;
+
+    const certification = this.certifyProject(files, projectName, blockchain, language, framework);
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    certification.report.checks.forEach(check => {
+      if (!check.passed) {
+        warnings.push(`${check.category}: ${check.message}`);
+      }
+    });
+
+    return {
+      isValid: certification.report.overallStatus !== 'FAIL',
+      errors,
+      warnings
+    };
+  }
+
+  /**
    * Main certification pipeline entry point: Runs all checks, applies repairs, attaches PROJECT_VALIDATION.md
    */
   public static certifyProject(
@@ -518,7 +469,8 @@ This smart contract workspace is **CERTIFIED COMPILER READY** for deployment, au
       this.validateDependencies(workingFiles, ecosystem),
       this.validateTests(workingFiles, ecosystem),
       this.validateDeploymentAssets(workingFiles, ecosystem),
-      this.validateCompilerCompatibility(workingFiles, ecosystem)
+      this.validateCompilerCompatibility(workingFiles, ecosystem),
+      this.validateWorkspaceLeakages(workingFiles)
     ];
 
     // 3. Generate PROJECT_VALIDATION.md report

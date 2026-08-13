@@ -1,8 +1,7 @@
 export type AIProvider =
   | "openai"
   | "groq"
-  | "anthropic"
-  | "openrouter";
+  | "anthropic";
 
 export interface AISettings {
   provider: AIProvider;

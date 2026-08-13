@@ -126,36 +126,51 @@ export default function GenerationLoader({
                 </div>
                 <div className="max-h-[220px] overflow-y-auto font-mono text-[10px] text-red-400 leading-relaxed scrollbar-thin whitespace-pre-wrap select-text space-y-1">
                   {(() => {
-                    const errObj = typeof error === 'object' && error !== null ? error : { message: String(error) };
-                    const rawMsg = errObj.message || String(error);
-                    const stageMatch = rawMsg.match(/Stage:\s*([^\n]+)/i);
-                    const engineMatch = rawMsg.match(/Engine:\s*([^\n]+)/i);
-                    const funcMatch = rawMsg.match(/Function:\s*([^\n]+)/i);
-                    const fileMatch = rawMsg.match(/File:\s*([^\n]+)/i);
-                    const lineMatch = rawMsg.match(/Line:\s*([^\n]+)/i);
-                    const reasonMatch = rawMsg.match(/Reason:\s*([^\n]+)/i);
+                    let errData: any = {};
+                    const rawMsg = typeof error === 'object' && error !== null ? (error as any).message || JSON.stringify(error) : String(error);
+                    
+                    try {
+                      errData = JSON.parse(rawMsg);
+                    } catch {
+                      errData = { message: rawMsg };
+                    }
 
-                    const stage = stageMatch ? stageMatch[1] : 'Finalizing';
-                    const engine = engineMatch ? engineMatch[1] : 'EngineeringCertificationEngine';
-                    const func = funcMatch ? funcMatch[1] : 'certifyProject';
-                    const file = fileMatch ? fileMatch[1] : 'EngineeringCertificationEngine.ts';
-                    const line = lineMatch ? lineMatch[1] : '600';
-                    const reason = reasonMatch ? reasonMatch[1] : rawMsg;
+                    const stage = errData.stage || 'Execution';
+                    const engine = errData.engine || 'EngineeringCore';
+                    const file = errData.file || 'AuthoritativePipelineRouter.ts';
+                    const errorCode = errData.errorCode || 'PIPELINE_ERROR';
+                    const message = errData.message || rawMsg;
+                    const command = errData.command;
+                    const exitCode = errData.exitCode;
+                    const stdout = errData.stdout;
+                    const stderr = errData.stderr;
 
                     return (
                       <div className="space-y-1">
                         <div className="text-slate-200 font-bold border-b border-red-900/30 pb-1 mb-1">
-                          Generation Interrupted
+                          Pipeline Exception [{errorCode}]
                         </div>
                         <div><span className="text-slate-400">Stage:</span> <span className="text-cyan-400 font-bold">{stage}</span></div>
                         <div><span className="text-slate-400">Engine:</span> <span className="text-amber-400 font-bold">{engine}</span></div>
-                        <div><span className="text-slate-400">Function:</span> <span className="text-slate-200">{func}</span></div>
                         <div><span className="text-slate-400">File:</span> <span className="text-slate-300">{file}</span></div>
-                        <div><span className="text-slate-400">Line:</span> <span className="text-slate-300">{line}</span></div>
-                        <div><span className="text-slate-400">Reason:</span> <span className="text-red-300 font-medium">{reason}</span></div>
+                        <div><span className="text-slate-400">Message:</span> <span className="text-red-300 font-medium">{message}</span></div>
+                        {command && <div><span className="text-slate-400">Command:</span> <span className="text-indigo-300 font-mono">{command}</span></div>}
+                        {exitCode !== undefined && <div><span className="text-slate-400">Exit Code:</span> <span className="text-red-400 font-mono">{exitCode}</span></div>}
+                        {stderr && (
+                          <div className="mt-2 pt-2 border-t border-red-900/40">
+                            <span className="text-slate-400 block font-bold">Stderr Output:</span>
+                            <pre className="text-[9px] text-red-300 font-mono bg-black/40 p-2 rounded overflow-x-auto whitespace-pre-wrap">{stderr}</pre>
+                          </div>
+                        )}
+                        {stdout && (
+                          <div className="mt-1">
+                            <span className="text-slate-400 block font-bold">Stdout Output:</span>
+                            <pre className="text-[9px] text-slate-300 font-mono bg-black/40 p-2 rounded overflow-x-auto whitespace-pre-wrap">{stdout}</pre>
+                          </div>
+                        )}
                         <div className="pt-1 border-t border-red-900/30 mt-1 flex justify-between text-[9px] text-slate-400">
                           <span>Workspace: <strong className="text-emerald-400">PRESERVED</strong></span>
-                          <span>Retry: <strong className="text-cyan-400">AVAILABLE</strong></span>
+                          <span>Retry: <strong className={errorCode === 'RATE_LIMIT_ERROR' ? 'text-red-400 font-bold' : 'text-cyan-400'}>{errorCode === 'RATE_LIMIT_ERROR' ? 'UNAVAILABLE (Rate Limit)' : 'AVAILABLE'}</strong></span>
                         </div>
                       </div>
                     );
@@ -171,14 +186,34 @@ export default function GenerationLoader({
                 >
                   Adjust Prompt
                 </button>
-                {onRetry && (
-                  <button
-                    onClick={onRetry}
-                    className="flex-1 py-3 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-[0.98] cursor-pointer"
-                  >
-                    Auto-Repair & Retry
-                  </button>
-                )}
+                {onRetry && (() => {
+                  let isRateLimit = false;
+                  try {
+                    const rawMsg = typeof error === 'object' && error !== null ? (error as any).message || JSON.stringify(error) : String(error);
+                    const parsed = JSON.parse(rawMsg);
+                    if (parsed.code === 'RATE_LIMIT_ERROR' || parsed.statusCode === 429) isRateLimit = true;
+                  } catch {
+                    const s = String(error).toLowerCase();
+                    if (s.includes('429') || s.includes('rate limit') || s.includes('rate exceeded')) isRateLimit = true;
+                  }
+
+                  if (isRateLimit) {
+                    return (
+                      <div className="flex-1 py-3 bg-red-950/40 border border-red-500/30 text-red-300 rounded-xl text-[10px] font-bold text-center px-2">
+                        Retry Unavailable — Rate Limit Reached
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <button
+                      onClick={onRetry}
+                      className="flex-1 py-3 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-[0.98] cursor-pointer"
+                    >
+                      Auto-Repair & Retry
+                    </button>
+                  );
+                })()}
               </div>
             </div>
           ) : (

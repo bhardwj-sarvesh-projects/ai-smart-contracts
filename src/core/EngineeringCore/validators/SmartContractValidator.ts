@@ -17,10 +17,12 @@ export class SmartContractValidator {
 
     if (ext === 'sol') {
       const lines = trimmedContent.split('\n');
+      let foundPragma = false;
+      let nonCommentLinesChecked = 0;
       let inMultiComment = false;
-      let firstNonCommentLine = '';
 
       for (const rawLine of lines) {
+        if (nonCommentLinesChecked >= 10) break;
         let line = rawLine.trim();
         if (!line) continue;
 
@@ -47,23 +49,22 @@ export class SmartContractValidator {
         }
 
         if (!line) continue;
-
         if (line.startsWith('//')) {
           continue;
         }
 
-        firstNonCommentLine = line;
-        break;
+        nonCommentLinesChecked++;
+        if (line.startsWith('pragma solidity')) {
+          foundPragma = true;
+          break;
+        }
       }
 
-      if (!firstNonCommentLine.startsWith('pragma solidity')) {
-        throw new Error(`INVALID_AI_RESPONSE: Solidity file ${path} must begin with pragma solidity`);
+      if (!foundPragma) {
+        throw new Error(`INVALID_AI_RESPONSE: Solidity file ${path} must include pragma solidity in the first 10 non-comment lines`);
       }
       if (trimmedContent.startsWith('{') || trimmedContent.startsWith('[') || trimmedContent.includes('"files":')) {
         throw new Error(`INVALID_AI_RESPONSE: Solidity file ${path} contains JSON leakage`);
-      }
-      if (trimmedContent.includes('```')) {
-        throw new Error(`INVALID_AI_RESPONSE: Solidity file ${path} contains Markdown fence leakage`);
       }
       if (trimmedContent.includes('[profile.') || trimmedContent.includes('[package]')) {
         throw new Error(`INVALID_AI_RESPONSE: Solidity file ${path} contains TOML leakage`);

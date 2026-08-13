@@ -46,9 +46,9 @@ router.get("/", authMiddleware, (req: AuthenticatedRequest, res) => {
       email: req.user!.email,
       displayName: req.user!.displayName || "",
       photo: req.user!.photoURL || "",
-      provider: "openrouter",
+      provider: "openai",
       apiKey: "",
-      defaultModel: "google/gemini-2.5-pro",
+      defaultModel: "gpt-4o-mini",
       temperature: 0.2,
       maxTokens: 2000,
     });
@@ -133,12 +133,6 @@ router.post("/models", authMiddleware, async (req: AuthenticatedRequest, res) =>
           .sort();
       } else if (provider === "groq") {
         const client = new OpenAI({ apiKey: resolvedKey, baseURL: "https://api.groq.com/openai/v1", timeout: 5000 });
-        const list = await client.models.list();
-        modelsList = list.data
-          .map(m => m.id)
-          .sort();
-      } else if (provider === "openrouter") {
-        const client = new OpenAI({ apiKey: resolvedKey, baseURL: "https://openrouter.ai/api/v1", timeout: 5000 });
         const list = await client.models.list();
         modelsList = list.data
           .map(m => m.id)
@@ -247,21 +241,6 @@ function getFallbackModels(provider: string): string[] {
       return ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"];
     case "anthropic":
       return ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"];
-    case "openrouter":
-      return [
-        "anthropic/claude-sonnet-4",
-        "anthropic/claude-opus-4.1",
-        "openai/gpt-5",
-        "openai/gpt-5-mini",
-        "google/gemini-2.5-pro",
-        "google/gemini-2.5-flash",
-        "deepseek/deepseek-r1",
-        "deepseek/deepseek-v3",
-        "meta-llama/llama-4-maverick",
-        "qwen/qwen3-coder",
-        "mistralai/mistral-large",
-        "x-ai/grok-4"
-      ];
     default:
       return ["gpt-4o-mini"];
   }

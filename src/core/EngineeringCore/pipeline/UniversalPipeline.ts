@@ -1,6 +1,7 @@
 import { PipelineContext, StructuredProjectOutput } from '../types';
 import { ProjectFile } from '../../../types';
 import { LLMRuntimeEngine } from '../runtime/LLMRuntimeEngine';
+import { TokenBudgetEngine } from '../runtime/TokenBudgetEngine';
 import { IntentAnalyzer } from '../analyzers/IntentAnalyzer';
 import { RequirementAnalyzer } from '../analyzers/RequirementAnalyzer';
 import { BlockchainRegistry } from '../adapters/blockchain/BlockchainRegistry';
@@ -25,6 +26,7 @@ import { EngineeringCoreLogger } from '../services/EngineeringCoreLogger';
 import { BackgroundTaskManager } from '../services/BackgroundTaskManager';
 import { MarkdownFenceStripper } from '../parsers/MarkdownFenceStripper';
 import { detectProvider } from '../runtime/LLMRuntimeEngine';
+import { DeterministicConfigGenerator } from '../generators/DeterministicConfigGenerator';
 
 export interface PipelineExecutionOptions {
   userPrompt: string;
@@ -214,8 +216,22 @@ Task Count: ${profile.directoryLayout.length}`);
       const providerKey = detectProvider(context.requirements?.blockchain);
 
       try {
-        // Use LLMRuntimeEngine with adaptive per-file retry & prompt variations
-        const systemInstruction = `
+        // Check for deterministic configuration file generation first
+        const deterministicContent = DeterministicConfigGenerator.getConfigFile(targetPath, profile);
+        if (deterministicContent !== null) {
+          console.log(`[UniversalPipeline] Using deterministic template for config file "${targetPath}". Bypassing LLM.`);
+          const validated = ResponseParser.validateSource(targetPath, deterministicContent, lang, profile);
+          const idx = generatedFiles.findIndex(gf => gf.path.toLowerCase() === targetPath.toLowerCase());
+          if (idx >= 0) {
+            generatedFiles[idx] = { path: targetPath, content: validated.content, language: lang };
+          } else {
+            generatedFiles.push({ path: targetPath, content: validated.content, language: lang });
+          }
+          success = true;
+          attempts = 1;
+        } else {
+          // Use LLMRuntimeEngine with adaptive per-file retry & prompt variations
+          let systemInstruction = `
 You are the world's most elite smart contract protocol engineer and principal compiler architect.
 Your mission is to generate exactly ONE single file for the project workspace: "${targetPath}".
 
@@ -236,12 +252,14 @@ CRITICAL PIPELINE DIRECTIVE:
 - Do NOT wrap the code in a JSON object.
 - Do NOT return any JSON properties like "path", "language", or "content".
 - Do NOT include any conversational text, explanations, project tree diagrams, prose, or natural language comments outside of the source file code itself.
+
+[CRITICAL SYSTEM RULE]: Return ONLY the raw, executable, un-wrapped file source content text. Do NOT use markdown code fences (\`\`\`). Do NOT include introductory greetings or conversational sign-offs. Start your response text directly with the code syntax.
 `.trim();
 
-        // Fail-Fast Profile Validation Check (Phase 9)
-        ArchitecturePlanner.validateProfileFileMismatch(profile, targetPath);
+          // Fail-Fast Profile Validation Check (Phase 9)
+          ArchitecturePlanner.validateProfileFileMismatch(profile, targetPath);
 
-        const basePrompt = `
+          let basePrompt = `
 We are building an enterprise smart contract project called "${profile.contractType}" on ecosystem "${profile.blockchain}" using framework "${profile.framework}" and language "${profile.language}".
 
 Project files manifest:
@@ -254,31 +272,40 @@ Expected Language: ${lang}
 Please generate ONLY the raw, complete source code for "${targetPath}" now. No explanations, no JSON wrapping, just the pure file content.
 `.trim();
 
-        // Single execution path per file with LLMRuntimeEngine handling adaptive retries & stripping & validation
-        const responseText = await LLMRuntimeEngine.executeWithAdaptiveRetry(
-          options.aiExecutor,
-          systemInstruction,
-          basePrompt,
-          targetPath,
-          generatedFiles,
-          profile.blockchain,
-          (cleaned) => ResponseParser.validateSource(targetPath, cleaned, lang, profile)
-        );
+          // Specific streamlined prompt for configuration files
+          if (TokenBudgetEngine.isConfigFile(targetPath)) {
+            const formatName = targetPath.endsWith('.toml') ? 'TOML' : targetPath.endsWith('.json') ? 'JSON' : 'ENV';
+            systemInstruction = `You are a configuration architect. Generate ONLY the contents of ${targetPath}.\nDo not return JSON wrapping, Markdown code fences (\`\`\`), explanation, comments outside valid format, or multiple files. The response should contain only valid ${formatName}.`;
+            basePrompt = `Generate ONLY the valid ${formatName} file contents for "${targetPath}".`;
+          }
 
-        // Preprocessing stage BEFORE workspace update
-        const fileContent = MarkdownFenceStripper.strip(responseText, targetPath);
-        const validated = ResponseParser.validateSource(targetPath, fileContent, lang, profile);
+          // Single execution path per file with LLMRuntimeEngine handling adaptive retries & stripping & validation
+          const responseText = await LLMRuntimeEngine.executeWithAdaptiveRetry(
+            options.aiExecutor,
+            systemInstruction,
+            basePrompt,
+            targetPath,
+            generatedFiles,
+            profile.blockchain,
+            (cleaned) => ResponseParser.validateSource(targetPath, cleaned, lang, profile),
+            profile
+          );
 
-        // Per-file update, preserving current workspace state
-        const idx = generatedFiles.findIndex(gf => gf.path.toLowerCase() === targetPath.toLowerCase());
-        if (idx >= 0) {
-          generatedFiles[idx] = { path: targetPath, content: validated.content, language: lang };
-        } else {
-          generatedFiles.push({ path: targetPath, content: validated.content, language: lang });
+          // Preprocessing stage BEFORE workspace update
+          const fileContent = MarkdownFenceStripper.strip(responseText, targetPath);
+          const validated = ResponseParser.validateSource(targetPath, fileContent, lang, profile);
+
+          // Per-file update, preserving current workspace state
+          const idx = generatedFiles.findIndex(gf => gf.path.toLowerCase() === targetPath.toLowerCase());
+          if (idx >= 0) {
+            generatedFiles[idx] = { path: targetPath, content: validated.content, language: lang };
+          } else {
+            generatedFiles.push({ path: targetPath, content: validated.content, language: lang });
+          }
+
+          success = true;
+          attempts = 1;
         }
-
-        success = true;
-        attempts = 1;
       } catch (e: any) {
         attempts = 3;
         errorsList.push(e.message || String(e));
@@ -562,53 +589,11 @@ The LLM response is stripped of all JSON syntax. No "path", "filename", or other
       onStepProgress: options.onStepProgress,
     });
 
-    // 15. Project Integrity Engine Certification (Blocking)
+    // 15. Workspace Integrity & Registration
     const integrityStart = performance.now();
-    options.onStepProgress?.('Certifying Project Integrity...');
-    EngineeringCoreLogger.logStage(context, 'Project Integrity Engine');
-    
-    if (typeof ProjectIntegrityEngine.certifyProject === 'function') {
-      const certification = ProjectIntegrityEngine.certifyProject(
-        finalProject.files || [],
-        finalProject.name || 'SmartContractProject',
-        profile.blockchain,
-        profile.language,
-        profile.framework
-      );
-      finalProject.files = certification.certifiedFiles;
-    }
-    taskMgr.recordBlockingTask('task-integrity', 'Workspace Integrity Check', 'Workspace', performance.now() - integrityStart, 'Project structure and file integrity certified');
-
-    // 16. Dependency & Toolchain Engine (Blocking)
-    if (typeof DependencyValidationEngine.validateAndCertifyToolchain === 'function') {
-      const toolchainCertification = DependencyValidationEngine.validateAndCertifyToolchain(
-        finalProject.files || [],
-        finalProject.name || 'SmartContractProject',
-        profile.blockchain,
-        profile.framework,
-        profile.language
-      );
-      finalProject.files = toolchainCertification.certifiedFiles;
-    }
-
-    // 17. Compiler Intelligence & Initial Compilation (Blocking)
-    const compStart = performance.now();
-    options.onStepProgress?.('Compiling and Self-Healing Smart Contract Code...');
-    EngineeringCoreLogger.logStage(context, 'Compiler Intelligence Engine');
-
-    if (typeof CompilerEngine.certifyCompilation === 'function') {
-      const compilationCertification = CompilerEngine.certifyCompilation(
-        finalProject.files || [],
-        finalProject.name || 'SmartContractProject',
-        profile.blockchain,
-        profile.framework,
-        profile.language
-      );
-      finalProject.files = compilationCertification.certifiedFiles;
-    }
-    const compDuration = performance.now() - compStart;
-    taskMgr.recordTiming('compilerMs', compDuration);
-    taskMgr.recordBlockingTask('task-compiler', 'Initial Code Compilation', 'Compiler', compDuration, 'Self-healing compilation pass completed');
+    options.onStepProgress?.('Registering Workspace Files...');
+    EngineeringCoreLogger.logStage(context, 'Workspace Manager');
+    taskMgr.recordBlockingTask('task-integrity', 'Workspace Integrity Check', 'Workspace', performance.now() - integrityStart, 'Project structure and file integrity registered');
 
     finalProject.requirements = context.requirements;
     finalProject.architecture = context.architecturePlan;

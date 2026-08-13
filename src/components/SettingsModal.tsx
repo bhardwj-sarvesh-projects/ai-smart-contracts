@@ -202,11 +202,10 @@ export default function SettingsModal({ isOpen, onClose, currentUser, onSettings
             <label className="text-xs font-bold tracking-wide uppercase text-slate-400 dark:text-slate-500 flex items-center gap-2">
               <Shield size={12} className="text-indigo-500 dark:text-indigo-400" /> AI Service Provider
             </label>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               {[
-                { id: 'openai', name: 'OpenAI', desc: 'GPT Series' },
-                { id: 'groq', name: 'GroqCloud', desc: 'Ultra-low Latency' },
-                { id: 'openrouter', name: 'OpenRouter', desc: 'Unified AI Gateway' }
+                { id: 'openai', name: 'OpenAI', desc: 'GPT Series (gpt-4o, gpt-4o-mini)' },
+                { id: 'groq', name: 'GroqCloud', desc: 'Ultra-low Latency (Llama 3.3)' }
               ].map((p) => (
                 <button
                   id={`provider-btn-${p.id}`}
@@ -242,7 +241,7 @@ export default function SettingsModal({ isOpen, onClose, currentUser, onSettings
                 type={showKey ? 'text' : 'password'}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={apiKey ? "••••••••" : provider === 'openrouter' ? 'OpenRouter API Key (e.g. sk-or-v1-********************************)' : `Enter your ${provider.toUpperCase()} API key...`}
+                placeholder={apiKey ? "••••••••" : `Enter your ${provider.toUpperCase()} API key...`}
                 className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none transition pr-10 font-mono ${
                   isDark
                     ? 'bg-slate-900 border-slate-800 hover:border-slate-700 focus:border-indigo-500 text-slate-100 placeholder-slate-600'

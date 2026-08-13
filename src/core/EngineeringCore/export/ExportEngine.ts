@@ -23,6 +23,7 @@ export interface ExportCertificationResult {
     documentation: boolean;
   };
   issues: string[];
+  status: 'PASS' | 'FAIL' | 'NOT_VERIFIED';
 }
 
 export class ExportEngine {
@@ -52,39 +53,45 @@ export class ExportEngine {
   }
 
   /**
-   * 2. Validate Reports
+   * 2. Validate Reports & Diagnostics Isolation
+   * Ensures no internal platform diagnostics, temporary files, or provider error logs exist in client files.
    */
   public static validateReports(files: ProjectFile[]): {
     passed: boolean;
     presentReports: string[];
     missingReports: string[];
   } {
-    const requiredReports = [
-      'QUALITY_REPORT.md',
-      'COMPILATION_REPORT.md',
-      'SECURITY_REPORT.md',
-      'ARCHITECTURE_REPORT.md',
-      'TEST_REPORT.md',
-      'TEST_COVERAGE.md',
-      'DOCUMENTATION_REPORT.md',
-      'DEPLOYMENT_REPORT.md',
-      'DEPENDENCY_REPORT.md',
-      'PROJECT_VALIDATION.md'
+    const internalDiagnosticFiles = [
+      'QUALITY_REPORT.MD',
+      'COMPILATION_REPORT.MD',
+      'SECURITY_REPORT.MD',
+      'ARCHITECTURE_REPORT.MD',
+      'TEST_REPORT.MD',
+      'TEST_COVERAGE.MD',
+      'DOCUMENTATION_REPORT.MD',
+      'DEPLOYMENT_REPORT.MD',
+      'DEPENDENCY_REPORT.MD',
+      'PROJECT_VALIDATION.MD',
+      'ENGINEERING_CERTIFICATION.MD',
+      'EVIDENCE_MANIFEST.JSON'
     ];
 
     const currentPathsUpper = files.map(f => f.path.toUpperCase());
-
-    const presentReports = requiredReports.filter(r =>
-      currentPathsUpper.includes(r.toUpperCase()) ||
-      currentPathsUpper.includes(`REPORTS/${r.toUpperCase()}`)
+    const foundDiagnostics = internalDiagnosticFiles.filter(r =>
+      currentPathsUpper.includes(r) ||
+      currentPathsUpper.includes(`.DIAGNOSTICS/${r}`) ||
+      currentPathsUpper.some(p => p.endsWith(`/${r}`))
     );
 
-    const missingReports = requiredReports.filter(r => !presentReports.includes(r));
+    const hasLeakedDiagnostics = files.some(f => {
+      const pUpper = f.path.toUpperCase();
+      return internalDiagnosticFiles.some(r => pUpper.endsWith(r));
+    });
 
     return {
-      passed: missingReports.length === 0,
-      presentReports,
-      missingReports
+      passed: !hasLeakedDiagnostics,
+      presentReports: foundDiagnostics,
+      missingReports: []
     };
   }
 
@@ -124,22 +131,82 @@ export class ExportEngine {
   /**
    * 4. Validate Artifacts
    */
-  public static validateArtifacts(files: ProjectFile[]): { passed: boolean; artifactsCount: number } {
+  public static validateArtifacts(files: ProjectFile[], profile?: any): { passed: boolean; artifactsCount: number; status?: 'PASS' | 'FAIL' | 'NOT_APPLICABLE' | 'NOT_VERIFIED' } {
     const artifactFiles = files.filter(f =>
       f.path.includes('artifacts/') ||
       f.path.endsWith('.json') ||
       f.path.endsWith('.abi')
     );
+    const buildArtifacts = artifactFiles.filter(f =>
+      !f.path.toUpperCase().endsWith('MANIFEST.JSON') &&
+      !f.path.toUpperCase().endsWith('EVIDENCE_MANIFEST.JSON')
+    );
+    const validArtifacts = buildArtifacts.filter(f => f.content && f.content.trim().length > 0);
+
+    const isRequired = profile?.artifactsRequired === true || profile?.requiresArtifacts === true;
+
+    if (buildArtifacts.length === 0) {
+      if (isRequired) {
+        return { passed: false, artifactsCount: 0, status: 'FAIL' };
+      }
+      return { passed: true, artifactsCount: 0, status: 'NOT_APPLICABLE' };
+    }
+
+    const passed = validArtifacts.length === buildArtifacts.length;
     return {
-      passed: true,
-      artifactsCount: artifactFiles.length
+      passed,
+      artifactsCount: validArtifacts.length,
+      status: passed ? 'PASS' : 'FAIL'
+    };
+  }
+
+  /**
+   * Validate export package consistency and integrity
+   */
+  public static validatePackageConsistency(files: ProjectFile[]): { passed: boolean; issues: string[] } {
+    const issues: string[] = [];
+
+    for (const f of files) {
+      const pUpper = f.path.toUpperCase();
+      const content = f.content || '';
+
+      if (pUpper.startsWith('.DIAGNOSTICS/')) {
+        issues.push(`Forbidden internal diagnostic file in export package: ${f.path}`);
+      }
+
+      if (
+        content.includes('PROVIDER_ERROR') ||
+        content.includes('RATE_LIMIT_ERROR') ||
+        content.includes('CONTEXT_TOKEN_ERROR')
+      ) {
+        issues.push(`Export package file ${f.path} contains unhandled provider errors.`);
+      }
+
+      if (!pUpper.endsWith('.EXAMPLE') && !pUpper.endsWith('.MD') && !pUpper.endsWith('.TXT')) {
+        if (/PRIVATE_KEY\s*=\s*0x[a-fA-F0-9]{64}/.test(content)) {
+          issues.push(`Export package file ${f.path} contains exposed private key.`);
+        }
+        if (pUpper.endsWith('.SOL') || pUpper.endsWith('.RS') || pUpper.endsWith('.MOVE')) {
+          if (content.includes('```')) {
+            issues.push(`Export package code file ${f.path} contains markdown code fences, representing malformed source.`);
+          }
+        }
+      }
+    }
+
+    return {
+      passed: issues.length === 0,
+      issues
     };
   }
 
   /**
    * 5. Validate Deployment Assets
    */
-  public static validateDeploymentAssets(files: ProjectFile[]): { passed: boolean; presentAssets: string[] } {
+  public static validateDeploymentAssets(
+    files: ProjectFile[],
+    deploymentResult?: any
+  ): { passed: boolean; presentAssets: string[] } {
     const assets = files.filter(f =>
       f.path.includes('script/') ||
       f.path.includes('deploy/') ||
@@ -147,8 +214,14 @@ export class ExportEngine {
       f.path.endsWith('.env.example')
     ).map(f => f.path);
 
+    const hasAuthoritativeEvidence = !!(
+      deploymentResult &&
+      (deploymentResult.deploymentId || deploymentResult.reportMarkdown || deploymentResult.stateHistory || deploymentResult.state) &&
+      (deploymentResult.state === 'COMPLETED' || deploymentResult.status === 'PASS' || deploymentResult.passed === true)
+    );
+
     return {
-      passed: assets.length > 0,
+      passed: hasAuthoritativeEvidence,
       presentAssets: assets
     };
   }
@@ -160,49 +233,29 @@ export class ExportEngine {
     files: ProjectFile[],
     projectName: string,
     blockchain: string,
-    framework: string = 'Foundry/Anchor/Move'
+    framework: string = 'UNKNOWN',
+    compilerVersion: string = 'UNKNOWN'
   ): string {
+    const codeFiles = files.filter(f => f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move'));
+    const detectedLanguage = codeFiles.some(f => f.path.endsWith('.rs')) ? 'Rust' : codeFiles.some(f => f.path.endsWith('.move')) ? 'Move' : codeFiles.some(f => f.path.endsWith('.sol')) ? 'Solidity' : 'UNKNOWN';
+
+    const actualReports = files.filter(f => f.path.includes('REPORT')).map(f => f.path);
+    const actualDocs = files.filter(f => f.path.endsWith('.md') && !f.path.includes('REPORT') && !f.path.includes('diagrams/')).map(f => f.path);
+    const actualDiagrams = files.filter(f => f.path.includes('diagrams/')).map(f => f.path);
+    const actualArtifacts = files.filter(f => f.path.includes('artifacts/')).map(f => f.path);
+
     const manifest = {
       project: projectName,
       blockchain: blockchain,
       framework: framework,
-      compiler: 'solc 0.8.20 / rustc 1.75 / move-cli 3.0',
-      language: blockchain.includes('Solana') ? 'Rust' : blockchain.includes('Aptos') || blockchain.includes('Sui') ? 'Move' : 'Solidity',
+      compiler: compilerVersion,
+      language: detectedLanguage,
       version: 'v1.0.0-rc2',
       timestamp: new Date().toISOString(),
-      artifacts: files.filter(f => f.path.includes('artifacts/')).map(f => f.path),
-      reports: [
-        'QUALITY_REPORT.md',
-        'COMPILATION_REPORT.md',
-        'SECURITY_REPORT.md',
-        'ARCHITECTURE_REPORT.md',
-        'TEST_REPORT.md',
-        'TEST_COVERAGE.md',
-        'DOCUMENTATION_REPORT.md',
-        'DEPLOYMENT_REPORT.md',
-        'DEPENDENCY_REPORT.md',
-        'PROJECT_VALIDATION.md'
-      ],
-      documentation: [
-        'README.md',
-        'ARCHITECTURE.md',
-        'SECURITY.md',
-        'DEPLOYMENT.md',
-        'API_REFERENCE.md',
-        'CLIENT_HANDOVER.md',
-        'DEVELOPER_GUIDE.md',
-        'TESTING_GUIDE.md',
-        'CHANGELOG.md',
-        'LICENSE',
-        'KNOWLEDGE_INDEX.md'
-      ],
-      diagrams: [
-        'ARCHITECTURE_DIAGRAM.md',
-        'SEQUENCE_DIAGRAM.md',
-        'STATE_MACHINE.md',
-        'CLASS_DIAGRAM.md',
-        'FLOW_DIAGRAM.md'
-      ],
+      artifacts: actualArtifacts,
+      reports: actualReports,
+      documentation: actualDocs,
+      diagrams: actualDiagrams,
       generatedFilesCount: files.length,
       hashes: files.reduce((acc, f) => {
         acc[f.path] = this.computeSha256(f.content);
@@ -229,9 +282,8 @@ export class ExportEngine {
   public static generateVersionFile(version: string = 'v1.0.0-rc2'): string {
     return `Project Version: ${version}
 Build Environment: AI Studio Enterprise Engineering Core
-Release Target: RC2 Enterprise Client Delivery Ready
+Release Target: Enterprise Client Delivery
 Build Timestamp: ${new Date().toISOString()}
-Certification Gate: 100% Passed (Sprints 1-12)
 `;
   }
 
@@ -242,94 +294,44 @@ Certification Gate: 100% Passed (Sprints 1-12)
     files: ProjectFile[],
     projectName: string,
     blockchain: string,
-    exportResult: any
+    exportResult: any,
+    isCertified: boolean = false
   ): string {
+    let readinessStatus = 'UNKNOWN / NOT_VERIFIED';
+    let clientCertified = 'UNKNOWN / NOT_VERIFIED';
+
+    if (isCertified) {
+      if (exportResult && exportResult.exportCertified && exportResult.status === 'PASS') {
+        readinessStatus = '✅ PASSED & CERTIFIED FOR CLIENT DELIVERY';
+        clientCertified = 'YES';
+      } else {
+        readinessStatus = '❌ BLOCKED';
+        clientCertified = 'NO';
+      }
+    }
+
     return `# Enterprise Client Delivery Summary & Package Inspection Report
 
 **Project Name:** ${projectName}
 **Target Blockchain Network:** ${blockchain}
 **Release Version:** v1.0.0-rc2
-**Delivery Readiness Status:** ${exportResult.exportCertified ? '✅ PASSED & CERTIFIED FOR CLIENT DELIVERY' : '❌ BLOCKED'}
+**Delivery Readiness Status:** ${readinessStatus}
 **Execution Date:** ${new Date().toISOString()}
 
 ---
 
 ## 1. Project Overview & Architecture
-The **${projectName}** smart contract codebase has undergone full multi-stage enterprise verification across all 12 Engineering Core Sprints.
-This delivery package contains complete source contracts, automated test suites, deployment scripts, security audit reports, architectural specifications, and client handover runbooks.
+The **${projectName}** smart contract codebase has been prepared for delivery on ${blockchain}.
+${isCertified && exportResult && exportResult.exportCertified && exportResult.status === 'PASS'
+  ? 'This delivery package has passed all automated engineering gates and is certified for client delivery.'
+  : 'This package is currently pending, unverified, or blocked by unverified/failed engineering gates.'}
 
 ---
 
-## 2. Standard Enterprise Repository Folder Structure
-\`\`\`
-${projectName}/
-├── contracts/ / sources/ / src/ # Source Smart Contracts
-├── interfaces/                 # Contract Interfaces & Type Definitions
-├── libraries/                  # Utility Libraries & Safe Math Controllers
-├── scripts/ / deploy/          # Deterministic Deployment & Verification Runbooks
-├── tests/ / test/              # Automated Unit, Integration & Fuzzing Test Suites
-├── artifacts/                  # ABI & Compiled Bytecode Artifacts
-├── reports/                    # 10 Verification & Quality Reports
-│   ├── QUALITY_REPORT.md
-│   ├── COMPILATION_REPORT.md
-│   ├── SECURITY_REPORT.md
-│   ├── ARCHITECTURE_REPORT.md
-│   ├── TEST_REPORT.md
-│   ├── TEST_COVERAGE.md
-│   ├── DOCUMENTATION_REPORT.md
-│   ├── DEPLOYMENT_REPORT.md
-│   ├── DEPENDENCY_REPORT.md
-│   └── PROJECT_VALIDATION.md
-├── docs/                       # Technical Documentation Guides
-├── diagrams/                   # Mermaid Architecture & Sequence Diagrams
-│   ├── ARCHITECTURE_DIAGRAM.md
-│   ├── SEQUENCE_DIAGRAM.md
-│   ├── STATE_MACHINE.md
-│   ├── CLASS_DIAGRAM.md
-│   └── FLOW_DIAGRAM.md
-├── assets/                     # Deployment Artifacts & Configs
-├── README.md                   # Repository Entry Point & Quick Start
-├── ARCHITECTURE.md            # System Architecture & Logic Specification
-├── SECURITY.md                # Threat Matrix & Incident Response Policy
-├── DEPLOYMENT.md              # RPC Setup & Handover Checklist
-├── API_REFERENCE.md           # Public Functions & Event Specifications
-├── CLIENT_HANDOVER.md         # Operational Playbook for Client Team
-├── DEVELOPER_GUIDE.md         # Technical Setup & Contribution Rules
-├── TESTING_GUIDE.md           # Test Execution & Fuzzing Strategy
-├── CHANGELOG.md               # Version Release History
-├── LICENSE                    # Software License
-├── MANIFEST.json              # Complete Build & Hash Metadata
-├── VERSION.txt                # Release Version Certification Stamp
-├── CHECKSUMS.txt              # SHA256 Verification Hashes
-└── DELIVERY_SUMMARY.md        # Master Client Delivery Report
-\`\`\`
-
----
-
-## 3. Executive Status Summary Across All Engineering Gates
-
-| Gate Dimension | Status | Verification Detail |
-| :--- | :---: | :--- |
-| **Workspace Integrity** | ✅ PASS | Source files, contract structure, and entry points verified |
-| **Dependencies & Toolchain** | ✅ PASS | Zero vulnerable dependencies; toolchain lockfile verified |
-| **Compiler Build Certification** | ✅ PASS | 0 Errors, 0 Warnings; Bytecode generated cleanly |
-| **Security Audit & Protection** | ✅ PASS | 0 High/Critical findings; ReentrancyGuard & access control enforced |
-| **Deployment Readiness** | ✅ PASS | RPC scripts, env templates, and ownership transfer runbooks ready |
-| **Architecture Logic Alignment** | ✅ PASS | >= 90% business logic requirement coverage verified |
-| **Testing & QA Verification** | ✅ PASS | Automated unit, integration, and fuzz test suites passed |
-| **Documentation & Knowledge Index** | ✅ PASS | 11 core documents, 5 visual Mermaid diagrams synchronized |
-| **Checksum & Integrity Verification** | ✅ PASS | SHA256 hashes verified for all ${files.length} exported files |
-
----
-
-## 4. Client Handover Instructions
-1. Unpack export archive.
-2. Verify integrity by checking \`CHECKSUMS.txt\`:
-   \`\`\`bash
-   sha256sum -c CHECKSUMS.txt
-   \`\`\`
-3. Review \`CLIENT_HANDOVER.md\` for administrative multi-sig ownership transfer instructions.
-4. Refer to \`KNOWLEDGE_INDEX.md\` for master links to all technical guides and diagrams.
+## 2. Executive Status Summary
+- Total Exported Files: ${files.length}
+- Target Blockchain: ${blockchain}
+- Client Delivery Certified: ${clientCertified}
 `;
   }
 
@@ -359,94 +361,47 @@ ${projectName}/
     projectName: string,
     prompt: string,
     blockchain: string,
-    framework: string = 'Foundry/Anchor/Move'
+    framework: string = 'UNKNOWN',
+    options?: {
+      compilationResult?: any;
+      testingResult?: any;
+      securityAuditResult?: any;
+      dependencyResult?: any;
+      architectureResult?: any;
+      documentationResult?: any;
+      deploymentResult?: any;
+      compilerVersion?: string;
+      projectProfile?: any;
+    }
   ): ExportCertificationResult {
     const issues: string[] = [];
 
-    // 1. Workspace check
+    // 1. Validate the export package
     const wsCheck = this.validateWorkspace(files);
     if (!wsCheck.passed) issues.push(...wsCheck.issues);
 
-    // Prepare complete set of project files including standard reports
-    let exportedFiles = [...files];
+    // Prepare clean set of project files excluding internal diagnostics
+    const internalReportNames = new Set([
+      'QUALITY_REPORT.MD',
+      'COMPILATION_REPORT.MD',
+      'SECURITY_REPORT.MD',
+      'ARCHITECTURE_REPORT.MD',
+      'TEST_REPORT.MD',
+      'TEST_COVERAGE.MD',
+      'DOCUMENTATION_REPORT.MD',
+      'DEPLOYMENT_REPORT.MD',
+      'DEPENDENCY_REPORT.MD',
+      'PROJECT_VALIDATION.MD',
+      'ENGINEERING_CERTIFICATION.MD',
+      'EVIDENCE_MANIFEST.JSON'
+    ]);
 
-    // Ensure 10 standard reports exist in reports/ folder and workspace root
-    const requiredReports = [
-      { name: 'QUALITY_REPORT.md', defaultContent: `# Quality Gate Evaluation Report\n\n**Project Name:** ${projectName}\n**Status:** ✅ PASSED (Overall Score: 98/100)\n` },
-      { name: 'COMPILATION_REPORT.md', defaultContent: `# Compiler Build Certification Report\n\n**Project Name:** ${projectName}\n**Status:** ✅ PASSED (0 Errors, 0 Warnings)\n` },
-      { name: 'SECURITY_REPORT.md', defaultContent: `# Security Audit Report\n\n**Project Name:** ${projectName}\n**Status:** ✅ PASSED (0 High/Critical Vulnerabilities)\n` },
-      { name: 'ARCHITECTURE_REPORT.md', defaultContent: `# Architecture & Business Logic Report\n\n**Project Name:** ${projectName}\n**Status:** ✅ PASSED (100% Business Logic Alignment)\n` },
-      { name: 'TEST_REPORT.md', defaultContent: `# Automated Test Execution Report\n\n**Project Name:** ${projectName}\n**Status:** ✅ PASSED (All Unit & Integration Tests Green)\n` },
-      { name: 'TEST_COVERAGE.md', defaultContent: `# Test Coverage Analysis Report\n\n**Project Name:** ${projectName}\n**Overall Coverage:** 98%\n` },
-      { name: 'DOCUMENTATION_REPORT.md', defaultContent: `# Documentation Suite Certification Report\n\n**Project Name:** ${projectName}\n**Status:** ✅ PASSED (11 Core Docs + 5 Diagrams)\n` },
-      { name: 'DEPLOYMENT_REPORT.md', defaultContent: `# Deployment Readiness Report\n\n**Project Name:** ${projectName}\n**Status:** ✅ PASSED (RPC, Scripts, Handover Ready)\n` },
-      { name: 'DEPENDENCY_REPORT.md', defaultContent: `# Dependency & Toolchain Audit Report\n\n**Project Name:** ${projectName}\n**Status:** ✅ PASSED (Zero Vulnerable Packages)\n` },
-      { name: 'PROJECT_VALIDATION.md', defaultContent: `# Master Project Validation Report\n\n**Project Name:** ${projectName}\n**Status:** ✅ PASSED (Sprint 1-12 Client Delivery Ready)\n` }
-    ];
-
-    requiredReports.forEach(rep => {
-      const rootMatch = exportedFiles.find(f => f.path.toUpperCase() === rep.name.toUpperCase());
-      const repContent = rootMatch ? rootMatch.content : rep.defaultContent;
-
-      if (!rootMatch) {
-        exportedFiles.push({ path: rep.name, content: repContent, language: 'markdown' });
-      }
-
-      const reportSubpath = `reports/${rep.name}`;
-      const subMatch = exportedFiles.find(f => f.path.toUpperCase() === reportSubpath.toUpperCase());
-      if (!subMatch) {
-        exportedFiles.push({ path: reportSubpath, content: repContent, language: 'markdown' });
-      }
-    });
-
-    // Ensure 5 visual Mermaid diagrams exist in diagrams/ folder and root
-    const requiredDiagrams = [
-      'ARCHITECTURE_DIAGRAM.md',
-      'SEQUENCE_DIAGRAM.md',
-      'STATE_MACHINE.md',
-      'CLASS_DIAGRAM.md',
-      'FLOW_DIAGRAM.md'
-    ];
-
-    requiredDiagrams.forEach(diagName => {
-      const rootMatch = exportedFiles.find(f => f.path.toUpperCase() === diagName.toUpperCase());
-      const diagContent = rootMatch ? rootMatch.content : `# ${diagName.replace('.md', '')}\n\n\`\`\`mermaid\ngraph TD\n  User --> Contract\n\`\`\``;
-
-      if (!rootMatch) {
-        exportedFiles.push({ path: diagName, content: diagContent, language: 'markdown' });
-      }
-
-      const diagSubpath = `diagrams/${diagName}`;
-      const subMatch = exportedFiles.find(f => f.path.toUpperCase() === diagSubpath.toUpperCase());
-      if (!subMatch) {
-        exportedFiles.push({ path: diagSubpath, content: diagContent, language: 'markdown' });
-      }
-    });
-
-    // Ensure 11 core docs exist
-    const requiredDocs = [
-      'README.md',
-      'ARCHITECTURE.md',
-      'SECURITY.md',
-      'DEPLOYMENT.md',
-      'API_REFERENCE.md',
-      'CLIENT_HANDOVER.md',
-      'DEVELOPER_GUIDE.md',
-      'TESTING_GUIDE.md',
-      'CHANGELOG.md',
-      'LICENSE',
-      'KNOWLEDGE_INDEX.md'
-    ];
-
-    requiredDocs.forEach(docName => {
-      const match = exportedFiles.find(f => f.path.toUpperCase() === docName.toUpperCase());
-      if (!match) {
-        exportedFiles.push({
-          path: docName,
-          content: `# ${docName.replace('.md', '')}\n\nDocumentation for ${projectName} on ${blockchain}.`,
-          language: 'markdown'
-        });
-      }
+    let exportedFiles = files.filter(f => {
+      const pUpper = f.path.toUpperCase();
+      if (pUpper.startsWith('.DIAGNOSTICS/')) return false;
+      if (internalReportNames.has(pUpper)) return false;
+      if (pUpper.startsWith('REPORTS/') && internalReportNames.has(pUpper.replace('REPORTS/', ''))) return false;
+      return true;
     });
 
     // Generate Version File
@@ -455,65 +410,93 @@ ${projectName}/
     if (vIdx >= 0) exportedFiles[vIdx] = { path: 'VERSION.txt', content: versionTxt, language: 'text' };
     else exportedFiles.push({ path: 'VERSION.txt', content: versionTxt, language: 'text' });
 
-    // Generate Manifest
-    const manifestJson = this.generateManifest(exportedFiles, projectName, blockchain, framework);
-    const mIdx = exportedFiles.findIndex(f => f.path.toUpperCase() === 'MANIFEST.JSON');
-    if (mIdx >= 0) exportedFiles[mIdx] = { path: 'MANIFEST.json', content: manifestJson, language: 'json' };
-    else exportedFiles.push({ path: 'MANIFEST.json', content: manifestJson, language: 'json' });
-
-    // Generate Checksums
-    const checksumsTxt = this.generateChecksums(exportedFiles);
-    const cIdx = exportedFiles.findIndex(f => f.path.toUpperCase() === 'CHECKSUMS.TXT');
-    if (cIdx >= 0) exportedFiles[cIdx] = { path: 'CHECKSUMS.txt', content: checksumsTxt, language: 'text' };
-    else exportedFiles.push({ path: 'CHECKSUMS.txt', content: checksumsTxt, language: 'text' });
-
-    // Generate Delivery Summary
-    const dummyExportResult = { exportCertified: issues.length === 0 };
-    const deliverySummaryMd = this.generateDeliverySummary(exportedFiles, projectName, blockchain, dummyExportResult);
-    const sIdx = exportedFiles.findIndex(f => f.path.toUpperCase() === 'DELIVERY_SUMMARY.MD');
-    if (sIdx >= 0) exportedFiles[sIdx] = { path: 'DELIVERY_SUMMARY.md', content: deliverySummaryMd, language: 'markdown' };
-    else exportedFiles.push({ path: 'DELIVERY_SUMMARY.md', content: deliverySummaryMd, language: 'markdown' });
-
     // Validate gates
     const reportsCheck = this.validateReports(exportedFiles);
     const docsCheck = this.validateDocumentation(exportedFiles);
-    const artifactsCheck = this.validateArtifacts(exportedFiles);
-    const deployCheck = this.validateDeploymentAssets(exportedFiles);
+    const artifactsCheck = this.validateArtifacts(exportedFiles, options?.projectProfile);
+    const deployCheck = this.validateDeploymentAssets(exportedFiles, options?.deploymentResult);
+    const pkgCheck = this.validatePackageConsistency(exportedFiles);
+    if (!pkgCheck.passed) issues.push(...pkgCheck.issues);
 
     const validationGatesPassed = {
       workspace: wsCheck.passed,
-      integrity: true,
-      dependencies: true,
-      compiler: true,
-      security: true,
+      integrity: wsCheck.passed,
+      dependencies: options?.dependencyResult ? (options.dependencyResult.overallStatus === 'PASS') : false,
+      compiler: options?.compilationResult ? (options.compilationResult.status === 'PASS' && options.compilationResult.verificationMode === 'REAL_EXECUTION' && typeof options.compilationResult.exitCode === 'number' && options.compilationResult.exitCode === 0) : false,
+      security: options?.securityAuditResult ? ((options.securityAuditResult.criticalCount ?? 0) === 0 && (options.securityAuditResult.highCount ?? 0) === 0 && (options.securityAuditResult.overallStatus === 'PASS' || options.securityAuditResult.status === 'CERTIFIED_SECURE' || options.securityAuditResult.status === 'PASS')) : false,
       deployment: deployCheck.passed,
-      architecture: true,
-      testing: true,
-      documentation: docsCheck.passed
+      architecture: options?.architectureResult ? ((options.architectureResult.architecturePassed === true || options.architectureResult.status === 'PASS') && !!(options.architectureResult.requirements || options.architectureResult.comparison || options.architectureResult.scoreBreakdown || options.architectureResult.reportMarkdown)) : false,
+      testing: options?.testingResult ? (options.testingResult.status === 'PASS' && options.testingResult.verificationMode === 'REAL_EXECUTION' && typeof options.testingResult.exitStatus === 'number' && options.testingResult.exitStatus === 0) : false,
+      documentation: options?.documentationResult ? ((options.documentationResult.documentationPassed === true || options.documentationResult.status === 'PASS') && !!(options.documentationResult.reportMarkdown || options.documentationResult.certifiedFiles)) : docsCheck.passed
     };
 
     const reportsPresentCount = reportsCheck.presentReports.length;
     const docsPresentCount = docsCheck.presentDocs.length;
-    const diagramsPresentCount = 5;
 
+    // Calculate the actual count from the exported files.
+    const diagramsPresentCount = exportedFiles.filter(file =>
+      file.path.toLowerCase().includes('diagrams/')
+    ).length;
+
+    // 2. Determine the actual export status
     const exportCertified = issues.length === 0 &&
       reportsCheck.passed &&
       docsCheck.passed &&
-      validationGatesPassed.workspace;
+      pkgCheck.passed &&
+      artifactsCheck.passed &&
+      wsCheck.passed;
 
-    return {
+    let status: 'PASS' | 'FAIL' | 'NOT_VERIFIED' = 'PASS';
+    if (!files || files.length === 0) {
+      status = 'NOT_VERIFIED';
+    } else if (issues.length > 0 || !reportsCheck.passed || !docsCheck.passed || !pkgCheck.passed || !artifactsCheck.passed || !wsCheck.passed) {
+      status = 'FAIL';
+    }
+
+    // 3. Build the ExportCertificationResult (without placeholder manifest/checksums/delivery summary)
+    const result: ExportCertificationResult = {
       exportCertified,
       exportedFiles,
-      manifestJson,
-      checksumsTxt,
-      deliverySummaryMd,
+      manifestJson: '',
+      checksumsTxt: '',
+      deliverySummaryMd: '',
       versionTxt,
       reportsPresentCount,
       docsPresentCount,
       diagramsPresentCount,
       validationGatesPassed,
-      issues
+      issues,
+      status
     };
+
+    // 4. Generate the delivery summary from the actual result
+    const deliverySummaryMd = this.generateDeliverySummary(exportedFiles, projectName, blockchain, result, false);
+    result.deliverySummaryMd = deliverySummaryMd;
+
+    const sIdx = exportedFiles.findIndex(f => f.path.toUpperCase() === 'DELIVERY_SUMMARY.MD');
+    if (sIdx >= 0) exportedFiles[sIdx] = { path: 'DELIVERY_SUMMARY.md', content: deliverySummaryMd, language: 'markdown' };
+    else exportedFiles.push({ path: 'DELIVERY_SUMMARY.md', content: deliverySummaryMd, language: 'markdown' });
+
+    // Generate Manifest and Checksums from the actual final files
+    const compilerVersion = options?.compilerVersion || options?.compilationResult?.compilerVersion || 'UNKNOWN';
+    const fw = framework !== 'Foundry/Anchor/Move' && framework ? framework : (options?.compilationResult?.framework || 'UNKNOWN');
+
+    const manifestJson = this.generateManifest(exportedFiles, projectName, blockchain, fw, compilerVersion);
+    result.manifestJson = manifestJson;
+    const mIdx = exportedFiles.findIndex(f => f.path.toUpperCase() === 'MANIFEST.JSON');
+    if (mIdx >= 0) exportedFiles[mIdx] = { path: 'MANIFEST.json', content: manifestJson, language: 'json' };
+    else exportedFiles.push({ path: 'MANIFEST.json', content: manifestJson, language: 'json' });
+
+    const checksumsTxt = this.generateChecksums(exportedFiles);
+    result.checksumsTxt = checksumsTxt;
+    const cIdx = exportedFiles.findIndex(f => f.path.toUpperCase() === 'CHECKSUMS.TXT');
+    if (cIdx >= 0) exportedFiles[cIdx] = { path: 'CHECKSUMS.txt', content: checksumsTxt, language: 'text' };
+    else exportedFiles.push({ path: 'CHECKSUMS.txt', content: checksumsTxt, language: 'text' });
+
+    result.exportedFiles = exportedFiles;
+
+    // 5. Return the final result
+    return result;
   }
 
   /**
@@ -523,10 +506,12 @@ ${projectName}/
     files: ProjectFile[],
     projectName: string = 'SmartContractProject',
     blockchain: string = 'ethereum',
-    prompt: string = ''
+    prompt: string = '',
+    framework: string = 'UNKNOWN',
+    options?: any
   ) {
     if (!Array.isArray(files)) throw new Error("ExportEngine.certify: files must be an array");
-    const cert = this.certifyExport(files, projectName, blockchain, prompt);
+    const cert = this.certifyExport(files, projectName, prompt, blockchain, framework, options);
     if (!cert || !cert.exportedFiles) throw new Error("ExportEngine returned invalid result");
     return cert;
   }
@@ -538,8 +523,10 @@ ${projectName}/
     files: ProjectFile[],
     projectName: string = 'SmartContractProject',
     blockchain: string = 'ethereum',
-    prompt: string = ''
+    prompt: string = '',
+    framework: string = 'UNKNOWN',
+    options?: any
   ) {
-    return this.certify(files, projectName, blockchain, prompt);
+    return this.certify(files, projectName, blockchain, prompt, framework, options);
   }
 }

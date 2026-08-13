@@ -712,6 +712,9 @@ ${overallScore >= 90 ? 'Project meets or exceeds all enterprise client delivery 
   public static async generateProject(
     options: SmartContractGenerationOptions
   ): Promise<StructuredProjectOutput> {
+    if (!options.prompt || options.prompt.trim().length === 0) {
+      throw new Error('Prompt cannot be empty for contract generation');
+    }
     const blockchain = options.blockchain || 'Ethereum/EVM';
     const framework = options.framework || 'Foundry';
     const language = options.language || (blockchain === 'Solana' ? 'rust' : (blockchain === 'Aptos' || blockchain === 'Sui' ? 'move' : 'solidity'));

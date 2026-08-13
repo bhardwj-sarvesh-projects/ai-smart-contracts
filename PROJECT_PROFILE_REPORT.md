@@ -1,55 +1,27 @@
-# Single Source of Truth: Project Profile Architecture
+# Project Profile Specification Report
 
-**Engine Standard:** Universal Engineering Core (`UniversalPipeline`)  
-**Architecture Version:** v2.0.0-SSOT  
-**Status:** ✅ ENFORCED & VERIFIED  
-
----
-
-## Executive Summary
-
-The project generation pipeline previously allowed multiple independent engines to infer project metadata (blockchain, language, framework, compiler, validator, layout) independently. This led to inconsistent behaviors (e.g. Solana + Solang incorrectly resolving into Anchor Rust `programs/lib.rs`).
-
-This issue is permanently resolved by establishing **`ProjectProfile`** as the single, immutable source of truth for the entire core.
+## Overview
+In Generation Pipeline V2, the `ProjectProfile` is the **Immutable Single Source of Truth**. The profile is generated deterministically by `ArchitecturePlanner.createProfile()` prior to any LLM execution. The LLM is NEVER permitted to decide or alter project paths, filenames, extensions, compilers, or directory structures.
 
 ---
 
-## ProjectProfile Architecture
+## Profile Mapping Matrix
 
-```
-                                  [ ArchitecturePlanner ]
-                                             │
-                                  creates ProjectProfile (ONCE)
-                                             │
-                                             ▼
-                               ┌───────────────────────────┐
-                               │   ProjectProfile (FROZEN) │
-                               └─────────────┬─────────────┘
-                                             │
-      ┌──────────────────┬───────────────────┼───────────────────┬──────────────────┐
-      ▼                  ▼                   ▼                   ▼                  ▼
-[ Workspace ]   [ ResponseParser ]  [ IncrementalGen ]   [ CompilerEngine ]  [ CertEngine ]
-```
-
-### Immutable Fields
-- **`projectId`**: Unique identifier for the generation execution
-- **`blockchain`**: Resolved chain (`ethereum`, `solana`, `aptos`, `sui`, `cosmos`, etc.)
-- **`language`**: Resolved language (`solidity`, `rust`, `move`, `go`, `cairo`, `typescript`)
-- **`framework`**: Resolved framework (`foundry`, `hardhat`, `anchor`, `solang`, `aptos-framework`, `sui-framework`)
-- **`compiler`**: Target compiler (`forge`, `hardhat`, `anchor`, `solang`, `aptos-move`, `sui-move`)
-- **`validator`**: Target validator (`SolidityValidator`, `RustValidator`, `MoveValidator`, `FrontendValidator`)
-- **`workspaceTemplate`**: Target layout (`FoundryTemplate`, `HardhatTemplate`, `AnchorTemplate`, `SolangTemplate`, `AptosTemplate`, `SuiTemplate`)
-- **`directoryLayout`**: Complete array of relative file paths for the workspace
-- **`packageManager`**: `forge`, `cargo`, `npm`, `move`, `scarb`
-- **`deploymentTarget`**: Execution environment target
-- **`testingFramework`**: Framework-matched unit/integration test runner
+| Blockchain / Ecosystem | Language | Framework | Compiler | Workspace Template | Directory Layout Example |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **EVM (Ethereum, Polygon, Base, Arbitrum, Optimism, BNB, Avalanche)** | `solidity` | `foundry` | `forge` | `FoundryTemplate` | `contracts/Contract.sol`, `interfaces/IContract.sol`, `libraries/Lib.sol`, `test/Contract.t.sol`, `foundry.toml` |
+| **EVM (Hardhat)** | `solidity` | `hardhat` | `hardhat` | `HardhatTemplate` | `contracts/Contract.sol`, `scripts/deploy.ts`, `test/Contract.test.ts`, `hardhat.config.ts` |
+| **Solana (Anchor)** | `rust` | `anchor` | `anchor` | `AnchorTemplate` | `programs/my_contract/src/lib.rs`, `tests/anchor-test.ts`, `Anchor.toml`, `Cargo.toml` |
+| **Solana (Solang)** | `solidity` | `solang` | `solang` | `SolangTemplate` | `contracts/Contract.sol`, `tests/solang-test.ts`, `solang.toml` |
+| **Aptos** | `move` | `aptos-framework` | `aptos-move` | `AptosTemplate` | `sources/my_contract.move`, `tests/move_test.move`, `Move.toml` |
+| **Sui** | `move` | `sui-framework` | `sui-move` | `SuiTemplate` | `sources/my_contract.move`, `tests/move_test.move`, `Move.toml` |
+| **Cosmos** | `rust` | `cosmwasm` | `cargo-build` | `CosmWasmTemplate` | `contracts/my_contract/src/contract.rs`, `Cargo.toml` |
+| **Hyperledger** | `typescript` / `go` | `fabric` | `generic` | `FabricTemplate` | `chaincode/my_contract/contract.ts`, `config/connection.json` |
+| **Starknet** | `cairo` | `scarb` | `generic` | `ScarbTemplate` | `src/lib.cairo`, `src/my_contract.cairo`, `Scarb.toml` |
 
 ---
 
-## Fail-Fast Rules (Phase 9)
-
-If any generated file violates the immutable `ProjectProfile`, the pipeline throws `PROJECT_PROFILE_MISMATCH` and aborts immediately:
-
-- **Solang Projects:** Throw if `programs/`, `lib.rs`, or `Anchor.toml` is created.
-- **Anchor Projects:** Throw if `contracts/` or `.sol` is created.
-- **EVM Projects:** Throw if `programs/`, `lib.rs`, `Anchor.toml`, `Move.toml`, or `sources/` is created.
+## Profile Enforcement Mechanisms
+1. **`ArchitecturePlanner.createProfile(req)`**: Deterministically produces an immutable, frozen `ProjectProfile` object.
+2. **`ArchitecturePlanner.validateProfileFileMismatch(profile, filePath)`**: Throws `PROJECT_PROFILE_MISMATCH` if any generated file path violates the profile's allowed ecosystem structure.
+3. **`WorkspaceIsolationValidator.validate(files, profile)`**: Rejects any file containing prohibited cross-ecosystem syntax or file paths during workspace validation.

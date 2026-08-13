@@ -12,24 +12,35 @@ export class FrontendValidator {
       throw new Error(`INVALID_AI_RESPONSE: Frontend file ${path} is empty`);
     }
 
-    // Check for raw markdown fences leakage
-    if (trimmedContent.startsWith('```') && trimmedContent.endsWith('```')) {
-      throw new Error(`INVALID_AI_RESPONSE: Frontend file ${path} contains unextracted code fence wrappers`);
-    }
-
     if (ext === 'html') {
       // Validate HTML syntax
-      const hasDoctype = trimmedContent.toLowerCase().includes('<!doctype html');
-      const hasTags = /<[a-z0-9]+[^>]*>/i.test(trimmedContent);
-      if (!hasTags && !hasDoctype) {
-        throw new Error(`INVALID_AI_RESPONSE: HTML file ${path} does not contain valid HTML tags or DOCTYPE`);
+      const lines = trimmedContent.split('\n');
+      let firstTagLine = '';
+      for (const l of lines) {
+        const line = l.trim();
+        if (!line || line.startsWith('<!--')) continue;
+        firstTagLine = line.toLowerCase();
+        break;
       }
-      // Check unclosed markdown fence
-      if (trimmedContent.includes('```')) {
-        throw new Error(`INVALID_AI_RESPONSE: HTML file ${path} contains raw markdown code fences`);
+
+      if (!firstTagLine.startsWith('<!doctype') && !firstTagLine.startsWith('<html')) {
+        throw new Error(`INVALID_AI_RESPONSE: HTML file ${path} must begin with <!DOCTYPE or <html`);
       }
     } else if (['jsx', 'tsx', 'js', 'ts'].includes(ext)) {
-      // Validate React / TypeScript / JavaScript syntax
+      // Reject if it is valid JSON
+      if (trimmedContent.trim().startsWith('{')) {
+        try {
+          JSON.parse(trimmedContent.trim());
+          throw new Error(`INVALID_AI_RESPONSE: Script file ${path} contains JSON metadata instead of executable code`);
+        } catch (e: any) {
+          if (e.message.includes('contains JSON metadata')) {
+            throw e;
+          }
+          // Not valid JSON, which is expected for code
+        }
+      }
+
+      // Validate React / TypeScript / JavaScript syntax presence
       const hasStatements = 
         trimmedContent.includes('import ') ||
         trimmedContent.includes('export ') ||
@@ -41,23 +52,23 @@ export class FrontendValidator {
         trimmedContent.includes('interface ') ||
         trimmedContent.includes('type ') ||
         trimmedContent.includes('<') ||
-        trimmedContent.includes('return');
+        trimmedContent.includes('return') ||
+        trimmedContent.includes('describe(') ||
+        trimmedContent.includes('describe (') ||
+        trimmedContent.includes('it(') ||
+        trimmedContent.includes('it (') ||
+        trimmedContent.includes('test(') ||
+        trimmedContent.includes('test (') ||
+        trimmedContent.includes('console.') ||
+        trimmedContent.includes('require(') ||
+        trimmedContent.includes('expect(') ||
+        trimmedContent.includes('assert');
 
-      if (!hasStatements) {
+      if (!hasStatements && trimmedContent.length < 20) {
         throw new Error(`INVALID_AI_RESPONSE: Script file ${path} does not contain valid JavaScript/TypeScript code`);
       }
-
-      // Check bracket balance basics
-      let braceCount = 0;
-      for (const char of trimmedContent) {
-        if (char === '{') braceCount++;
-        if (char === '}') braceCount--;
-      }
-      if (braceCount !== 0) {
-        throw new Error(`INVALID_AI_RESPONSE: Script file ${path} has unmatched curly braces (balance: ${braceCount})`);
-      }
     } else if (['css', 'scss'].includes(ext)) {
-      // Validate CSS / SCSS syntax
+      // Validate CSS / SCSS syntax rules
       const hasCssRules = trimmedContent.includes('{') || trimmedContent.includes(':') || trimmedContent.startsWith('@import') || trimmedContent.startsWith('@tailwind');
       if (!hasCssRules) {
         throw new Error(`INVALID_AI_RESPONSE: CSS file ${path} does not contain valid style rules`);

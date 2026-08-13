@@ -16,33 +16,43 @@ export interface HealthResponse {
   error?: string;
 }
 
+export interface RequestOptions {
+  maxTokens?: number;
+  targetPath?: string;
+}
+
 export interface AIProvider {
   readonly name: string;
 
   generate(
     prompt: string,
     systemInstruction?: string,
-    responseMimeType?: string
+    responseMimeType?: string,
+    options?: RequestOptions
   ): Promise<AIResponse>;
 
   edit(
     prompt: string,
-    systemInstruction?: string
+    systemInstruction?: string,
+    options?: RequestOptions
   ): Promise<AIResponse>;
 
   audit(
     prompt: string,
-    systemInstruction?: string
+    systemInstruction?: string,
+    options?: RequestOptions
   ): Promise<AIResponse>;
 
   plan(
     prompt: string,
-    systemInstruction?: string
+    systemInstruction?: string,
+    options?: RequestOptions
   ): Promise<AIResponse>;
 
   compileAnalysis(
     prompt: string,
-    systemInstruction?: string
+    systemInstruction?: string,
+    options?: RequestOptions
   ): Promise<AIResponse>;
 
   healthCheck(): Promise<HealthResponse>;

@@ -53,7 +53,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Maximum timeout guard so auth initialization never blocks the UI indefinitely
+    const authTimeoutGuard = setTimeout(() => {
+      console.warn('[AUTH_CONTEXT] Auth state listener initialization timeout reached. Force-releasing loading state.');
+      setLoading(false);
+    }, 2500);
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      clearTimeout(authTimeoutGuard);
       if (firebaseUser) {
         try {
           // Check cached user first before firestore read to prevent duplicate profile queries
@@ -111,7 +118,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     });
 
-    return unsubscribe;
+    return () => {
+      clearTimeout(authTimeoutGuard);
+      unsubscribe();
+    };
   }, []);
 
   const login = useCallback(async (email: string, password: string): Promise<UserProfile> => {

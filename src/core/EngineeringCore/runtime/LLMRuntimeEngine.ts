@@ -1,5 +1,9 @@
 import { ProjectFile } from "../../../types";
 import { MarkdownFenceStripper } from "../parsers/MarkdownFenceStripper";
+import { LanguageExtractor } from "../parsers/LanguageExtractor";
+import { LanguageRepairEngine } from "../parsers/LanguageRepairEngine";
+import { ResponseClassifier } from "../parsers/ResponseClassifier";
+import { TokenBudgetEngine } from "./TokenBudgetEngine";
 
 export interface ProviderCapabilities {
   contextWindow: number;
@@ -25,14 +29,6 @@ export const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     supportsStreaming: true,
     supportsJSON: true,
     supportsToolCalling: true,
-    recommendedOutputTokens: 4096,
-  },
-  openrouter: {
-    contextWindow: 128000,
-    maxOutputTokens: 4096,
-    supportsStreaming: true,
-    supportsJSON: true,
-    supportsToolCalling: false,
     recommendedOutputTokens: 4096,
   },
   groq: {
@@ -69,14 +65,14 @@ export function detectProvider(modelOrName?: string): string {
   if (m.includes("claude") || m.includes("anthropic")) return "claude";
   if (m.includes("groq")) return "groq";
   if (m.includes("bedrock")) return "bedrock";
-  if (m.includes("openrouter")) return "openrouter";
   return "gemini"; // default fallback
 }
 
 export function calculateDynamicBudget(
   providerKey: string,
   promptLength: number,
-  userLimit?: number
+  userLimit?: number,
+  targetPath?: string
 ): { safeOutputTokens: number; promptTokens: number; remainingContext: number } {
   const provider = PROVIDER_CAPABILITIES[providerKey] || PROVIDER_CAPABILITIES.gemini;
   
@@ -88,12 +84,15 @@ export function calculateDynamicBudget(
   
   const remainingContext = provider.contextWindow - promptTokens - reservedSafetyMargin;
   
-  // Formula: safeOutput = min(provider.maxOutputTokens, remainingContext, userLimit)
-  const targetUserLimit = userLimit || provider.recommendedOutputTokens;
-  let safeOutputTokens = Math.min(provider.maxOutputTokens, remainingContext, targetUserLimit);
+  // Hard limit per file category
+  const fileCategoryMax = TokenBudgetEngine.getFileTypeMaxTokens(targetPath);
+
+  // Formula: safeOutput = min(provider.maxOutputTokens, remainingContext, targetUserLimit, fileCategoryMax)
+  const targetUserLimit = userLimit ? Math.min(userLimit, fileCategoryMax) : fileCategoryMax;
+  let safeOutputTokens = Math.min(provider.maxOutputTokens, remainingContext, targetUserLimit, fileCategoryMax);
   
-  // Clamp between minimum 256 and maximum provider capability
-  safeOutputTokens = Math.max(256, Math.min(safeOutputTokens, provider.maxOutputTokens));
+  // Hard clamp to ensure config files never exceed hard limit
+  safeOutputTokens = Math.min(safeOutputTokens, fileCategoryMax);
   
   return {
     safeOutputTokens,
@@ -106,6 +105,11 @@ export function pruneWorkspaceFiles(
   targetPath: string,
   generatedFiles: ProjectFile[]
 ): ProjectFile[] {
+  // Configuration files get MINIMAL context (0 source files)
+  if (TokenBudgetEngine.isConfigFile(targetPath)) {
+    return [];
+  }
+
   const excludedKeywords = [
     "readme",
     "report",
@@ -164,10 +168,19 @@ export function pruneWorkspaceFiles(
 
 export function buildPrunedWorkspaceContext(
   targetPath: string,
-  generatedFiles: ProjectFile[]
+  generatedFiles: ProjectFile[],
+  projectProfile?: any
 ): string {
+  if (TokenBudgetEngine.isConfigFile(targetPath)) {
+    const eco = projectProfile?.blockchain || 'Ecosystem';
+    const fw = projectProfile?.framework || 'Framework';
+    const lang = projectProfile?.language || 'Language';
+    const contractType = projectProfile?.contractType || 'Contract';
+    return `Minimal Configuration Context:\nEcosystem: ${eco}\nFramework: ${fw}\nLanguage: ${lang}\nContract Type: ${contractType}`;
+  }
+
   const pruned = pruneWorkspaceFiles(targetPath, generatedFiles);
-  if (pruned.length === 0) return "(None yet)";
+  if (pruned.length === 0) return "(Minimal context)";
   
   return pruned
     .map(gf => `File: ${gf.path}\n\`\`\`${gf.language}\n${gf.content}\n\`\`\``)
@@ -210,13 +223,14 @@ export class LLMRuntimeEngine {
   }
 
   public static async executeWithAdaptiveRetry(
-    aiExecutor: (systemInstruction: string, prompt: string) => Promise<string>,
+    aiExecutor: (systemInstruction: string, prompt: string, targetPath?: string, maxTokens?: number) => Promise<string>,
     systemInstruction: string,
     prompt: string,
     targetPath: string,
     generatedFiles: ProjectFile[],
     modelOrName?: string,
-    validator?: (cleanedContent: string) => void
+    validator?: (cleanedContent: string) => void,
+    projectProfile?: any
   ): Promise<string> {
     const providerKey = detectProvider(modelOrName);
     const provider = PROVIDER_CAPABILITIES[providerKey] || PROVIDER_CAPABILITIES.gemini;
@@ -233,7 +247,8 @@ export class LLMRuntimeEngine {
 
       let retrySystemInstruction = systemInstruction;
       let retryPromptText = prompt;
-      let targetUserLimit = provider.recommendedOutputTokens;
+      let fileMaxTokens = TokenBudgetEngine.getFileTypeMaxTokens(targetPath);
+      let targetUserLimit = fileMaxTokens;
 
       if (attempts === 2) {
         let requiredSyntax = '';
@@ -245,7 +260,7 @@ export class LLMRuntimeEngine {
           requiredSyntax = '\nFirst line MUST begin with module.';
         }
 
-        retrySystemInstruction += `\nRETRY INSTRUCTION (Attempt 2): Generate ONLY ${targetPath}.\nReturn RAW source code only.\nNo markdown.\nNo explanations.${requiredSyntax}`;
+        retrySystemInstruction += `\nRETRY INSTRUCTION (Attempt 2): Generate ONLY ${targetPath}.\nReturn RAW source code only.\nNo markdown.\nNo explanations.${requiredSyntax}\n[CRITICAL SYSTEM RULE]: Return ONLY the raw, executable, un-wrapped file source content text. Do NOT use markdown code fences (\`\`\`). Do NOT include introductory greetings or conversational sign-offs. Start your response text directly with the code syntax.`;
         retryPromptText += `\n[PER-FILE RETRY MODE] Output pure source code for "${targetPath}" only.`;
       } else if (attempts === 3) {
         let requiredSyntax = '';
@@ -253,12 +268,12 @@ export class LLMRuntimeEngine {
           requiredSyntax = '\nFirst line MUST be:\npragma solidity ^0.8.20;';
         }
 
-        retrySystemInstruction += `\nCRITICAL RETRY INSTRUCTION (Attempt 3): Pure code mode activated for ${targetPath}.\nGenerate ONLY ${targetPath}.\nReturn RAW source code only.\nNo markdown.\nNo explanations.${requiredSyntax}`;
+        retrySystemInstruction += `\nCRITICAL RETRY INSTRUCTION (Attempt 3): Pure code mode activated for ${targetPath}.\nGenerate ONLY ${targetPath}.\nReturn RAW source code only.\nNo markdown.\nNo explanations.${requiredSyntax}\n[CRITICAL SYSTEM RULE]: Return ONLY the raw, executable, un-wrapped file source content text. Do NOT use markdown code fences (\`\`\`). Do NOT include introductory greetings or conversational sign-offs. Start your response text directly with the code syntax.`;
         retryPromptText += `\n[STRICT PURE CODE MODE] Absolute raw code output required for ${targetPath}.`;
-        targetUserLimit = Math.floor(provider.recommendedOutputTokens / 2);
+        targetUserLimit = Math.min(fileMaxTokens, Math.floor(provider.recommendedOutputTokens / 2));
       }
 
-      const workspaceContextText = buildPrunedWorkspaceContext(targetPath, currentGeneratedFiles);
+      const workspaceContextText = buildPrunedWorkspaceContext(targetPath, currentGeneratedFiles, projectProfile);
       const fullPromptText = `
 Workspace Context:
 ${workspaceContextText}
@@ -270,22 +285,65 @@ ${retryPromptText}
       const { safeOutputTokens, promptTokens } = calculateDynamicBudget(
         providerKey,
         fullPromptText.length,
-        targetUserLimit
+        targetUserLimit,
+        targetPath
       );
 
-      try {
-        const rawResponse = await aiExecutor(retrySystemInstruction, fullPromptText);
-        const executionTime = Date.now() - startTime;
-        
-        // Response Cleanup before validation
-        const cleanedResponse = MarkdownFenceStripper.strip(rawResponse, targetPath);
+      // Pre-request assertion for token budget safety
+      TokenBudgetEngine.assertTokenBudget(targetPath, safeOutputTokens);
 
-        // Run validation inside retry loop
-        if (validator) {
-          validator(cleanedResponse);
+      // Internal diagnostic logging before LLM request
+      console.log(`[LLM DIAGNOSTIC PRE-REQUEST]
+Target File: "${targetPath}"
+File Category: "${TokenBudgetEngine.getFileCategory(targetPath)}"
+Provider: "${providerKey}" | Model: "${modelOrName || "default"}"
+Requested Max Tokens: ${safeOutputTokens}
+Estimated Input Tokens: ${promptTokens}
+Estimated Output Tokens: ${safeOutputTokens}
+Estimated Total Tokens: ${promptTokens + safeOutputTokens}`);
+
+      try {
+        const rawResponse = await aiExecutor(retrySystemInstruction, fullPromptText, targetPath, safeOutputTokens);
+        const executionTime = Date.now() - startTime;
+        const completionTokens = Math.ceil(rawResponse.length / 4);
+        const firstFiveLines = rawResponse.split('\n').slice(0, 5).join('\n');
+
+        // Detailed observability log BEFORE validation
+        console.log(`[LLM RUNTIME OBSERVABILITY LOG]
+Target File: "${targetPath}"
+Language: "${ext}"
+Provider: "${providerKey}"
+Attempt: ${attempts}/3
+Prompt Tokens: ${promptTokens}
+Completion Tokens: ${completionTokens}
+First 5 Lines:
+${firstFiveLines}`);
+
+        // Classify response before normalization or validation
+        const classification = ResponseClassifier.classify(rawResponse, targetPath);
+        if (classification === 'PROVIDER_ERROR' || classification === 'RATE_LIMIT_ERROR' || classification === 'CONTEXT_TOKEN_ERROR' || classification === 'EMPTY_RESPONSE') {
+          throw new Error(`INVALID_AI_RESPONSE: Response classified as error state: ${classification}. Raw response starting with: ${firstFiveLines}`);
+        }
+        if (classification === 'STRUCTURED_JSON_METADATA' && !targetPath.toLowerCase().endsWith('.json')) {
+          throw new Error(`INVALID_AI_RESPONSE: Received structured JSON metadata or schema instead of raw source code for non-JSON file ${targetPath}. Raw response starting with: ${firstFiveLines}`);
         }
 
-        const completionTokens = Math.ceil(cleanedResponse.length / 4);
+        // Response Normalization & Language Repair
+        const normalizedResponse = LanguageExtractor.extractAndNormalize(rawResponse, targetPath);
+        const repairedResponse = LanguageRepairEngine.repair(targetPath, normalizedResponse);
+
+        // Run validation
+        let validationResult = 'PASS';
+        if (validator) {
+          try {
+            validator(repairedResponse);
+          } catch (valErr: any) {
+            validationResult = `FAIL (${valErr.message || String(valErr)})`;
+            throw valErr;
+          }
+        }
+
+        console.log(`[LLM RUNTIME OBSERVABILITY LOG] Validation Result for "${targetPath}": ${validationResult}`);
 
         this.logRequest({
           provider: providerKey,
@@ -300,10 +358,19 @@ ${retryPromptText}
           executionTime,
         });
 
-        return cleanedResponse;
+        return repairedResponse;
       } catch (err: any) {
         lastError = err;
         const executionTime = Date.now() - startTime;
+
+        const msg = (err.message || String(err)).toLowerCase();
+        const isRateLimit = err.status === 429 || err.isTerminal || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate exceeded") || msg.includes("rate_limit_exceeded") || msg.includes("too many requests") || msg.includes("tpd") || msg.includes("tpm") || msg.includes("rpm") || msg.includes("quota exceeded") || msg.includes("insufficient quota") || msg.includes("insufficient credits");
+        const isAuth = err.status === 401 || err.status === 403 || err.status === 402 || msg.includes("401") || msg.includes("403") || msg.includes("402") || msg.includes("invalid_api_key") || msg.includes("unauthorized");
+
+        if (isRateLimit || isAuth) {
+          console.log(`[LLM RUNTIME] Terminal rate limit or auth error detected. Bypassing all retries and failing immediately.`);
+          throw err;
+        }
         
         console.log(`[RETRY ENGINE LOG] file: "${targetPath}" | attempt: ${attempts}/3 | validation stage: "LLM_VALIDATION" | provider: "${providerKey}" | promptTokens: ${promptTokens} | completionTokens: 0 | failure reason: "${err.message || String(err)}" | retry duration: ${executionTime}ms`);
 

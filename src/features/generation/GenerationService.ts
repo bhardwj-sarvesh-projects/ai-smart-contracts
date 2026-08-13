@@ -11,7 +11,12 @@ export interface GenerationOptions {
 
 export class GenerationService {
   static async generate(options: GenerationOptions): Promise<StructuredProjectOutput> {
-    const aiExecutor = async (systemInstruction: string, promptText: string): Promise<string> => {
+    const aiExecutor = async (
+      systemInstruction: string,
+      promptText: string,
+      targetPath?: string,
+      maxTokens?: number
+    ): Promise<string> => {
       const res = await options.authedFetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -21,12 +26,34 @@ export class GenerationService {
           language: options.language || 'solidity',
           framework: options.framework || 'foundry',
           systemInstruction,
+          targetPath,
+          maxTokens,
         }),
       });
 
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'AI generation failed');
+        const text = await res.text();
+        let errData;
+        try {
+          errData = JSON.parse(text);
+        } catch {
+          errData = {
+            success: false,
+            error: {
+              code: "API_ERROR",
+              errorCode: "API_ERROR",
+              stage: "AI Generation",
+              engine: "AIService",
+              provider: options.blockchain || 'openai',
+              model: 'gpt-4o-mini',
+              statusCode: res.status,
+              message: text || 'AI generation failed',
+              retryable: false
+            }
+          };
+        }
+        const errorObj = errData.error || errData;
+        throw new Error(typeof errorObj === 'string' ? errorObj : JSON.stringify(errorObj));
       }
 
       const json = await res.json();
