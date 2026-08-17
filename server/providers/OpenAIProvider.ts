@@ -14,9 +14,9 @@ export class OpenAIProvider implements AIProvider {
       apiKey: config.apiKey,
       timeout: 60000,
     });
-    this.model = config.model || "gpt-4o-mini";
-    this.temperature = typeof config.temperature === "number" ? config.temperature : 0.2;
-    this.maxTokens = typeof config.maxTokens === "number" ? config.maxTokens : 2000;
+    this.model = config.model || "disabled";
+    this.temperature = 0.1;
+    this.maxTokens = 65536;
     console.log(`[OPENAI PROVIDER] Initialized dynamically with model: ${this.model}`);
   }
 

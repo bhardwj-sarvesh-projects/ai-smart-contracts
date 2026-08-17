@@ -14,36 +14,13 @@ interface RightAssistantProps {
   setActiveModel: (m: string) => void;
 }
 
-const PROVIDERS = [
-  { id: 'openai', name: 'OpenAI', desc: 'OpenAI models configured by the server' },
-  { id: 'groq', name: 'Groq', desc: 'Groq models configured by the server' }
-];
-
-const MODELS: Record<string, string[]> = {
-  openai: ['gpt-4o-mini', 'gpt-4o', 'o3-mini'],
-  groq: ['llama-3.3-70b-versatile', 'llama3-70b-8192']
-};
-
-function RightAssistant({
-  auditResult,
-  files,
-  onApplyAIFix,
-  onEditContract,
-  isProcessing,
-  activeProvider,
-  setActiveProvider,
-  activeModel,
-  setActiveModel
-}: RightAssistantProps) {
+function RightAssistant({ auditResult, files, onApplyAIFix, onEditContract, isProcessing }: RightAssistantProps) {
   const [activeTab, setActiveTab] = useState<'copilot' | 'auditor'>('copilot');
   const [editInstruction, setEditInstruction] = useState('');
-  const [showProviderSettings, setShowProviderSettings] = useState(false);
 
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editInstruction.trim() || isProcessing) return;
-    const start = performance.now();
-    console.log(`[PERF] 🤖 AI Generation Started using ${activeProvider}/${activeModel} at ${start.toFixed(2)}ms`);
     onEditContract(editInstruction.trim());
     setEditInstruction('');
   };
@@ -66,95 +43,25 @@ function RightAssistant({
 
   return (
     <div className="flex flex-col h-full bg-slate-900 border-l border-slate-800 text-slate-300 select-none">
-      {/* Header Tabs */}
       <div className="flex border-b border-slate-800 bg-slate-950/40 p-1">
-        <button
-          onClick={() => setActiveTab('copilot')}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium rounded transition-colors ${
-            activeTab === 'copilot'
-              ? 'bg-slate-800 text-white'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-          id="tab-copilot"
-        >
-          <Bot className="w-3.5 h-3.5" />
-          AI Copilot
+        <button onClick={() => setActiveTab('copilot')} className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium rounded transition-colors ${activeTab === 'copilot' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'}`}>
+          <Bot className="w-3.5 h-3.5" /> AI Copilot
         </button>
-        <button
-          onClick={() => setActiveTab('auditor')}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium rounded transition-colors ${
-            activeTab === 'auditor'
-              ? 'bg-slate-800 text-white'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-          id="tab-auditor"
-        >
-          <ShieldAlert className="w-3.5 h-3.5" />
-          Security Auditor
-          {auditResult && Array.isArray(auditResult.vulnerabilities) && auditResult.vulnerabilities.length > 0 && (
-            <span className="bg-rose-500 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full">
-              {auditResult.vulnerabilities.length}
-            </span>
-          )}
+        <button onClick={() => setActiveTab('auditor')} className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium rounded transition-colors ${activeTab === 'auditor' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'}`}>
+          <ShieldAlert className="w-3.5 h-3.5" /> Security Auditor
+          {auditResult && Array.isArray(auditResult.vulnerabilities) && auditResult.vulnerabilities.length > 0 && <span className="bg-rose-500 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full">{auditResult.vulnerabilities.length}</span>}
         </button>
       </div>
 
-      {/* AI Assistant Settings Panel */}
       <div className="p-2.5 bg-slate-950/20 border-b border-slate-800/60 flex items-center justify-between text-xs">
         <div className="flex items-center gap-1.5">
           <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
           <span className="font-mono text-[11px] text-slate-400">
-            Provider: <strong className="text-cyan-400 uppercase">{activeProvider}</strong> ({activeModel})
+            <strong className="text-cyan-400">GROQ INTELLIGENT ROUTER</strong> · Automatic model & credential failover
           </span>
         </div>
-        <button
-          onClick={() => setShowProviderSettings(!showProviderSettings)}
-          className="text-[10px] text-slate-400 hover:text-cyan-400 underline transition-colors"
-          id="btn-toggle-provider"
-        >
-          {showProviderSettings ? 'Close' : 'Configure'}
-        </button>
+        <span className="text-[9px] px-1.5 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">LOCKED POLICY</span>
       </div>
-
-      {showProviderSettings && (
-        <div className="p-3 bg-slate-950 border-b border-slate-800 space-y-3">
-          <div className="space-y-1">
-            <label className="text-[10px] text-slate-500 uppercase font-semibold">Select AI Engine</label>
-            <div className="grid grid-cols-2 gap-1">
-              {PROVIDERS.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => {
-                    setActiveProvider(p.id);
-                    setActiveModel(MODELS[p.id][0]);
-                  }}
-                  className={`p-1.5 border rounded text-left transition-all ${
-                    activeProvider === p.id
-                      ? 'border-cyan-500 bg-cyan-950/20 text-white'
-                      : 'border-slate-800 bg-slate-900/40 text-slate-400 hover:border-slate-700'
-                  }`}
-                >
-                  <p className="font-medium text-[11px] truncate">{p.name}</p>
-                  <p className="text-[9px] text-slate-500 truncate">{p.desc}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-[10px] text-slate-500 uppercase font-semibold">Active Model Variant</label>
-            <select
-              value={activeModel}
-              onChange={(e) => setActiveModel(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded p-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
-            >
-              {(MODELS[activeProvider] || []).map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-      )}
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">

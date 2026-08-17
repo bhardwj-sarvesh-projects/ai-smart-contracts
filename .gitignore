@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+# Server-side AI credential store (local fallback; encrypted at rest)
+data/ai_credentials.json

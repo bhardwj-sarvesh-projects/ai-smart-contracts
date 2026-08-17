@@ -16,6 +16,8 @@ import SettingsModal from './components/SettingsModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAuth } from './context/AuthContext';
 import { AppCache } from './lib/cache';
+import { auth } from './firebase/firebase';
+import { getIdToken } from 'firebase/auth';
 import { GenerationService } from './features/generation/GenerationService';
 import { PatchEngine, WorkspaceManager, BackgroundTaskManager } from './core/EngineeringCore';
 
@@ -105,36 +107,27 @@ export default function App() {
   }, [toast]);
 
   // Active AI Provider config with cache fallback
-  const [activeProvider, setActiveProvider] = useState(() => {
-    const cachedSettings = AppCache.get<any>('user_settings');
-    return cachedSettings?.provider || 'auto';
-  });
-  const [activeModel, setActiveModel] = useState(() => {
-    const cachedSettings = AppCache.get<any>('user_settings');
-    return cachedSettings?.defaultModel || 'Intelligent Router';
-  });
+  const [activeProvider, setActiveProvider] = useState('groq-router');
+  const [activeModel, setActiveModel] = useState('Intelligent Router');
 
-  // Authed Fetch Helper
+  // Authenticated fetch: send a verified Firebase ID token. Legacy identity headers
+  // are retained only for non-security user isolation compatibility.
   const authedFetch = async (url: string, options: RequestInit = {}) => {
-    const headers = {
-      ...(options.headers || {}),
-    } as Record<string, string>;
-
+    const headers = { ...(options.headers || {}) } as Record<string, string>;
     if (user) {
       headers['x-user-id'] = user.uid;
       headers['x-user-email'] = user.email;
       headers['x-user-name'] = (user as any).displayName || user.fullName || '';
       headers['x-user-photo'] = user.photoURL || '';
+      try {
+        const firebaseUser = auth.currentUser;
+        if (firebaseUser) headers['Authorization'] = `Bearer ${await getIdToken(firebaseUser, true)}`;
+      } catch (tokenError) {
+        console.warn('[AUTH] Unable to refresh Firebase ID token:', tokenError);
+      }
     }
-
-    if (options.body && !headers['Content-Type']) {
-      headers['Content-Type'] = 'application/json';
-    }
-
-    return fetch(url, {
-      ...options,
-      headers,
-    });
+    if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+    return fetch(url, { ...options, headers });
   };
 
   // Independent background startup load when user is present
@@ -163,8 +156,8 @@ export default function App() {
       const res = await authedFetch('/api/settings');
       if (res.ok) {
         const data = await res.json();
-        setActiveProvider(data.provider || 'openai');
-        setActiveModel(data.defaultModel || 'Intelligent Router');
+        setActiveProvider('groq-router');
+        setActiveModel('Intelligent Router');
         AppCache.set('user_settings', data, 300000);
 
         performance.mark('settings_loaded');

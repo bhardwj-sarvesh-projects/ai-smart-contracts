@@ -15,9 +15,9 @@ export class GroqProvider implements AIProvider {
       baseURL: "https://api.groq.com/openai/v1",
       timeout: 60000,
     });
-    this.model = config.model || "llama-3.3-70b-versatile";
-    this.temperature = typeof config.temperature === "number" ? config.temperature : 0.2;
-    this.maxTokens = typeof config.maxTokens === "number" ? config.maxTokens : 2000;
+    this.model = config.model || "openai/gpt-oss-20b";
+    this.temperature = 0.1;
+    this.maxTokens = 65536;
     console.log(`[GROQ PROVIDER] Initialized dynamically with model: ${this.model}`);
   }
 

@@ -4,10 +4,11 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { AIService } from "./server/services/AIService";
-import { OPENAI_MODEL, AI_CONFIG } from "./server/config/ai";
+import { AI_TEMPERATURE, GLOBAL_MAX_OUTPUT_TOKENS } from "./server/config/aiPolicy";
 import { SettingsService, UserConfig } from "./server/services/SettingsService";
-import { isDummyOrEmptyKey } from "./server/providers/ProviderFactory";
+import { requireAdminUser, requireAuthenticatedUser } from "./server/services/FirebaseAdminAuth";
 import settingsRouter from "./server/routes/settings";
+import aiInfrastructureRouter from "./server/routes/aiInfrastructure";
 import { PatchEngine } from "./src/core/EngineeringCore/patch/PatchEngine";
 import { ProjectIntegrityEngine } from "./src/core/EngineeringCore/validators/ProjectIntegrityEngine";
 import { SecurityAuditEngine } from "./src/core/EngineeringCore/security/SecurityAuditEngine";
@@ -20,59 +21,32 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
-// Helper to resolve active user AI configuration or use central fallback
+// AI configuration is authoritative on the server. User requests cannot select
+// providers, models, API keys, temperature, or token limits.
 function getActiveUserConfig(req: express.Request): UserConfig {
-  const userId = req.headers["x-user-id"] as string;
-  const email = req.headers["x-user-email"] as string;
-  const displayName = req.headers["x-user-name"] as string;
-  const photo = req.headers["x-user-photo"] as string;
-
-  let userConfig = userId ? SettingsService.getDecrypted(userId) : null;
-
-  if (!userConfig) {
-    let activeProvider = AI_CONFIG.provider || "openai";
-    let activeKey = "";
-    let activeModel = "";
-
-    if (activeProvider === "openai") {
-      activeKey = AI_CONFIG.openai.apiKey;
-      activeModel = AI_CONFIG.openai.model || "gpt-4o-mini";
-    } else if (activeProvider === "groq") {
-      activeKey = AI_CONFIG.groq.apiKey;
-      activeModel = AI_CONFIG.groq.model || "llama-3.3-70b-versatile";
-    }
-
-    if (isDummyOrEmptyKey(activeKey, activeProvider)) {
-      if (process.env.OPENAI_API_KEY && !isDummyOrEmptyKey(process.env.OPENAI_API_KEY, "openai")) {
-        activeProvider = "openai";
-        activeKey = process.env.OPENAI_API_KEY;
-        activeModel = "gpt-4o-mini";
-      } else if (process.env.GROQ_API_KEY && !isDummyOrEmptyKey(process.env.GROQ_API_KEY, "groq")) {
-        activeProvider = "groq";
-        activeKey = process.env.GROQ_API_KEY;
-        activeModel = "llama-3.3-70b-versatile";
-      }
-    }
-
-    userConfig = {
-      userId: userId || "default",
-      email: email || "default@smartcontract.ai",
-      displayName: displayName || "Default User",
-      photo: photo || "",
-      provider: activeProvider,
-      apiKey: activeKey,
-      defaultModel: activeModel || "gpt-4o-mini",
-      temperature: 0.2,
-      maxTokens: 2000,
-      createdDate: new Date().toISOString(),
-      updatedDate: new Date().toISOString(),
-    };
-  }
-  return userConfig;
+  const userId = (req as any).firebaseUser?.uid || (req.headers["x-user-id"] as string) || "default";
+  const email = (req as any).firebaseUser?.email || (req.headers["x-user-email"] as string) || "default@smartcontract.ai";
+  const displayName = (req as any).firebaseUser?.name || (req.headers["x-user-name"] as string) || "User";
+  const photo = (req.headers["x-user-photo"] as string) || "";
+  return {
+    userId, email, displayName, photo, provider: "groq", apiKey: "",
+    defaultModel: "platform-router", temperature: AI_TEMPERATURE,
+    maxTokens: GLOBAL_MAX_OUTPUT_TOKENS, createdDate: new Date().toISOString(),
+    updatedDate: new Date().toISOString(),
+  };
 }
 
 // Mount AI Settings Router
 app.use("/api/settings", settingsRouter);
+app.use("/api/admin/ai", aiInfrastructureRouter);
+
+// All AI execution endpoints require a verified Firebase identity.
+app.use("/api/generate", requireAuthenticatedUser);
+app.use("/api/generate-plan", requireAuthenticatedUser);
+app.use("/api/edit", requireAuthenticatedUser);
+app.use("/api/audit", requireAuthenticatedUser);
+app.use("/api/compile", requireAuthenticatedUser);
+
 
 
 // Helper to access DB path
@@ -253,7 +227,7 @@ app.delete("/api/projects/:id", (req, res) => {
 });
 
 // Centralized API Error Normalizer Helper
-function sendStructuredError(res: express.Response, err: any, providerName = "openai", modelName = "gpt-4o-mini") {
+function sendStructuredError(res: express.Response, err: any, providerName = "groq", modelName = "platform-router") {
   console.error("[SERVER ERROR]", err);
   let statusCode = 500;
   let code = "API_ERROR";
@@ -400,7 +374,7 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
 app.post("/api/generate", async (req, res) => {
   try {
     const userConfig = getActiveUserConfig(req);
-    const { prompt, blockchain, language, framework, contractType, plan, systemInstruction, targetPath, maxTokens } = req.body;
+    const { prompt, blockchain, language, framework, contractType, plan, systemInstruction, targetPath, maxTokens, routeAttempt } = req.body;
 
     if (!prompt) {
       return res.status(400).json({ error: "Prompt is required" });
@@ -409,7 +383,7 @@ app.post("/api/generate", async (req, res) => {
     // Intercept V2 single file generation when systemInstruction is present
     if (systemInstruction) {
       console.log(`[SERVER /api/generate] Serving V2 single file generation for targetPath: "${targetPath || 'N/A'}", maxTokens: ${maxTokens || 'default'}`);
-      const rawText = await AIService.generateRawSource(userConfig, prompt, systemInstruction, targetPath, maxTokens);
+      const rawText = await AIService.generateRawSource(userConfig, prompt, systemInstruction, targetPath, maxTokens, routeAttempt);
       return res.json({ success: true, data: rawText });
     }
 
@@ -1205,22 +1179,8 @@ app.post("/api/deploy", (req, res) => {
 // ADMINISTRATOR PORTAL ENDPOINTS
 // -------------------------------------------------------------
 
-// Admin Role protection middleware helper
-function checkAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const email = req.headers["x-user-email"] as string;
-  if (email && email.trim().toLowerCase() === "sarveshtiwarisarvesh@gmail.com") {
-    return next();
-  }
-  // Check from configs
-  const userId = req.headers["x-user-id"] as string;
-  if (userId) {
-    const config = SettingsService.get(userId);
-    if (config && config.email && config.email.trim().toLowerCase() === "sarveshtiwarisarvesh@gmail.com") {
-      return next();
-    }
-  }
-  return res.status(403).json({ error: "Access denied: Administrator role required." });
-}
+// Admin Role protection is based on a verified Firebase ID token, never client-spoofable headers.
+const checkAdmin = requireAdminUser;
 
 // Admin stats
 app.get("/api/admin/stats", checkAdmin, (req, res) => {
@@ -1272,7 +1232,7 @@ app.put("/api/admin/users/:userId/toggle-status", checkAdmin, (req, res) => {
   const current = SettingsService.get(userId);
   if (!current) {
     // Let's bootstrap user if they don't exist yet in config but exist in request
-    const mockEmail = req.headers["x-user-email"] as string || "unknown@ai-contracts.com";
+    const mockEmail = (req as any).firebaseUser?.email || "unknown@ai-contracts.com";
     const initialized = SettingsService.save(userId, { email: mockEmail, isActive: true });
     const toggled = SettingsService.updateRoleAndStatus(userId, { isActive: false });
     return res.json(toggled);
@@ -1294,7 +1254,7 @@ app.put("/api/admin/users/:userId/role", checkAdmin, (req, res) => {
   const current = SettingsService.get(userId);
   if (!current) {
     // Bootstrap
-    const mockEmail = req.headers["x-user-email"] as string || "unknown@ai-contracts.com";
+    const mockEmail = (req as any).firebaseUser?.email || "unknown@ai-contracts.com";
     SettingsService.save(userId, { email: mockEmail });
   }
 

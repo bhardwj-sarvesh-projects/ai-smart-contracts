@@ -4,6 +4,7 @@ import {
   Search, Shield, UserCheck, Eye, ArrowLeft, BarChart3, Lock
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import AdminAIInfrastructure from './AdminAIInfrastructure';
 
 interface UserProfile {
   uid: string;
@@ -44,7 +45,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ theme, authedFetch, onClose, showToast }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'users' | 'projects' | 'stats'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'projects' | 'stats' | 'ai'>('users');
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [projects, setProjects] = useState<ProjectData[]>([]);
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -54,6 +55,29 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
   const [userSearch, setUserSearch] = useState('');
   const [projectSearch, setProjectSearch] = useState('');
   const [selectedProject, setSelectedProject] = useState<ProjectData | null>(null);
+
+  const readAdminError = async (response: Response): Promise<Error> => {
+    let payload: any = null;
+    try {
+      payload = await response.clone().json();
+    } catch {
+      // Some proxy/server failures are not JSON.
+    }
+
+    const error = new Error(
+      payload?.message ||
+      (response.status === 503
+        ? "The server cannot verify administrator access because Firebase Admin credentials are not configured correctly."
+        : response.status === 403
+          ? "Your Firebase account is authenticated, but it is not authorized as an administrator."
+          : response.status === 401
+            ? "Your Firebase administrator session could not be verified. Please sign out and sign in again."
+            : `Administrator request failed with HTTP ${response.status}.`)
+    );
+    (error as any).status = response.status;
+    (error as any).code = payload?.code;
+    return error;
+  };
 
   const fetchAdminData = async () => {
     setIsLoading(true);
@@ -65,16 +89,17 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
         authedFetch('/api/admin/stats')
       ]);
 
-      if (!usersRes.ok || !projectsRes.ok || !statsRes.ok) {
-        throw new Error("Failed to load administrative details. Are you logged in as an administrator?");
+      const failedResponse = [usersRes, projectsRes, statsRes].find((response) => !response.ok);
+      if (failedResponse) {
+        throw await readAdminError(failedResponse);
       }
 
       const usersData = await usersRes.json();
       const projectsData = await projectsRes.json();
       const statsData = await statsRes.json();
 
-      setUsers(usersData);
-      setProjects(projectsData);
+      setUsers(Array.isArray(usersData) ? usersData : []);
+      setProjects(Array.isArray(projectsData) ? projectsData : []);
       setStats(statsData);
     } catch (err: any) {
       setError(err.message || "An unexpected admin loading error occurred.");
@@ -196,14 +221,24 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
       {error ? (
         <div className="p-8 text-center max-w-md mx-auto space-y-4">
           <ShieldAlert className="w-12 h-12 text-red-500 mx-auto" />
-          <h2 className="text-md font-bold">Access Denied</h2>
+          <h2 className="text-md font-bold">{error.includes('Firebase Admin') ? 'Administrator Authentication Service Not Configured' : 'Administrator Panel Error'}</h2>
           <p className="text-xs text-slate-400">{error}</p>
-          <button 
-            onClick={onClose}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold"
-          >
-            Return to Safety
-          </button>
+          {error.includes('Firebase Admin') && (
+            <div className={`text-left text-xs rounded-xl border p-4 ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+              <p className="font-semibold mb-2">Server configuration required</p>
+              <p className="text-slate-400 leading-relaxed">
+                Configure FIREBASE_SERVICE_ACCOUNT_JSON, or FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY, on the server. Do not place these credentials in frontend code.
+              </p>
+            </div>
+          )}
+          <div className="flex items-center justify-center gap-2">
+            <button onClick={fetchAdminData} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold">
+              Retry
+            </button>
+            <button onClick={onClose} className={`px-4 py-2 rounded-xl text-xs font-semibold border ${isDark ? 'border-slate-800 text-slate-300' : 'border-slate-200 text-slate-700'}`}>
+              Return to Safety
+            </button>
+          </div>
         </div>
       ) : isLoading && !users.length ? (
         <div className="flex-1 flex flex-col items-center justify-center">
@@ -251,6 +286,15 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
             >
               <BarChart3 size={14} />
               Analytics Dashboard
+            </button>
+            <button
+              onClick={() => { setActiveTab('ai'); setSelectedProject(null); }}
+              className={`flex items-center gap-1.5 py-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                activeTab === 'ai' ? 'border-emerald-500 text-emerald-500' : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Shield size={14} />
+              AI Infrastructure
             </button>
           </div>
 
@@ -515,6 +559,11 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
                   )}
                 </div>
               </div>
+            )}
+
+            {/* Tab: AI Infrastructure */}
+            {activeTab === 'ai' && (
+              <AdminAIInfrastructure authedFetch={authedFetch} theme={theme} showToast={showToast} />
             )}
 
             {/* Tab: Stats */}

@@ -9,8 +9,8 @@ export interface TPMTracker {
 const providerTPMMap: Record<string, TPMTracker> = {
   groq: {
     provider: 'groq',
-    model: 'llama-3.3-70b-versatile',
-    tpmLimit: 8000,
+    model: 'platform-router',
+    tpmLimit: 250000,
     recentTokensUsed: 0,
     lastResetTime: Date.now()
   },
@@ -25,7 +25,7 @@ const providerTPMMap: Record<string, TPMTracker> = {
 
 export class TokenBudgetEngine {
   public static getFileTypeMaxTokens(targetPath?: string): number {
-    if (!targetPath) return 2000;
+    if (!targetPath) return 65536;
     const pathLower = targetPath.toLowerCase().trim();
     const filename = pathLower.split('/').pop() || '';
 
@@ -36,7 +36,7 @@ export class TokenBudgetEngine {
       filename.endsWith('.env') ||
       filename.endsWith('.env.example')
     ) {
-      return 256;
+      return 1024;
     }
 
     // 2. foundry.toml, solang.toml, Anchor.toml, Move.toml -> 512
@@ -46,7 +46,7 @@ export class TokenBudgetEngine {
       filename === 'anchor.toml' ||
       filename === 'move.toml'
     ) {
-      return 512;
+      return 8192;
     }
 
     // 3. Cargo.toml, package.json, tsconfig.json, vite.config.* -> 768
@@ -57,7 +57,7 @@ export class TokenBudgetEngine {
       filename.startsWith('vite.config.') ||
       filename.startsWith('vite.config')
     ) {
-      return 768;
+      return 16384;
     }
 
     // 4. README.md, LICENSE, other small documentation -> 1000
@@ -69,7 +69,7 @@ export class TokenBudgetEngine {
       pathLower.endsWith('.md') ||
       pathLower.endsWith('.txt')
     ) {
-      return 1000;
+      return 16384;
     }
 
     // 5. Tests -> 3000
@@ -79,7 +79,7 @@ export class TokenBudgetEngine {
       pathLower.includes('/test/') ||
       pathLower.includes('/tests/')
     ) {
-      return 3000;
+      return 65536;
     }
 
     // 6. Deployment scripts -> 2500
@@ -88,27 +88,27 @@ export class TokenBudgetEngine {
       pathLower.includes('migration') ||
       pathLower.includes('script')
     ) {
-      return 2500;
+      return 65536;
     }
 
     // 7. Solidity -> 3500
     if (pathLower.endsWith('.sol')) {
-      return 3500;
+      return 65536;
     }
 
     // 8. Rust -> 4000
     if (pathLower.endsWith('.rs')) {
-      return 4000;
+      return 65536;
     }
 
     // 9. Move -> 3500
     if (pathLower.endsWith('.move')) {
-      return 3500;
+      return 65536;
     }
 
     // 10. HTML/CSS -> 1500
     if (pathLower.endsWith('.html') || pathLower.endsWith('.css')) {
-      return 1500;
+      return 16384;
     }
 
     // 11. JS/TS -> 2000
@@ -118,10 +118,10 @@ export class TokenBudgetEngine {
       pathLower.endsWith('.jsx') ||
       pathLower.endsWith('.tsx')
     ) {
-      return 2000;
+      return 65536;
     }
 
-    return 2000;
+    return 65536;
   }
 
   public static isConfigFile(targetPath?: string): boolean {

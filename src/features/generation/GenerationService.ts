@@ -15,7 +15,8 @@ export class GenerationService {
       systemInstruction: string,
       promptText: string,
       targetPath?: string,
-      maxTokens?: number
+      maxTokens?: number,
+      routeAttempt?: number
     ): Promise<string> => {
       const res = await options.authedFetch('/api/generate', {
         method: 'POST',
@@ -28,6 +29,7 @@ export class GenerationService {
           systemInstruction,
           targetPath,
           maxTokens,
+          routeAttempt,
         }),
       });
 
@@ -44,8 +46,8 @@ export class GenerationService {
               errorCode: "API_ERROR",
               stage: "AI Generation",
               engine: "AIService",
-              provider: options.blockchain || 'openai',
-              model: 'gpt-4o-mini',
+              provider: 'groq',
+              model: 'platform-router',
               statusCode: res.status,
               message: text || 'AI generation failed',
               retryable: false

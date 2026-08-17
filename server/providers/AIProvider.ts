@@ -19,6 +19,7 @@ export interface HealthResponse {
 export interface RequestOptions {
   maxTokens?: number;
   targetPath?: string;
+  routeAttempt?: number;
 }
 
 export interface AIProvider {

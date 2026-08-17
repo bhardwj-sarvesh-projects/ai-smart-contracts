@@ -24,21 +24,19 @@ export const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     recommendedOutputTokens: 4096,
   },
   groq: {
-    contextWindow: 32768,
-    maxOutputTokens: 4096,
+    contextWindow: 131072,
+    maxOutputTokens: 65536,
     supportsStreaming: true,
     supportsJSON: true,
     supportsToolCalling: true,
-    recommendedOutputTokens: 2048,
+    recommendedOutputTokens: 65536,
   },
 };
 
-export function detectProvider(modelOrName?: string): string {
-  if (!modelOrName) return "openai";
-  const m = modelOrName.toLowerCase();
-  if (m.includes("gpt") || m.includes("openai")) return "openai";
-  if (m.includes("groq")) return "groq";
-  return "openai";
+export function detectProvider(_modelOrName?: string): string {
+  // AI execution is now owned by the server-side Groq Intelligent Router.
+  // The client/pipeline cannot select a provider or model.
+  return "groq";
 }
 
 export function calculateDynamicBudget(
@@ -196,7 +194,7 @@ export class LLMRuntimeEngine {
   }
 
   public static async executeWithAdaptiveRetry(
-    aiExecutor: (systemInstruction: string, prompt: string, targetPath?: string, maxTokens?: number) => Promise<string>,
+    aiExecutor: (systemInstruction: string, prompt: string, targetPath?: string, maxTokens?: number, routeAttempt?: number) => Promise<string>,
     systemInstruction: string,
     prompt: string,
     targetPath: string,
@@ -276,7 +274,7 @@ Estimated Output Tokens: ${safeOutputTokens}
 Estimated Total Tokens: ${promptTokens + safeOutputTokens}`);
 
       try {
-        const rawResponse = await aiExecutor(retrySystemInstruction, fullPromptText, targetPath, safeOutputTokens);
+        const rawResponse = await aiExecutor(retrySystemInstruction, fullPromptText, targetPath, safeOutputTokens, attempts);
         const executionTime = Date.now() - startTime;
         const completionTokens = Math.ceil(rawResponse.length / 4);
         const firstFiveLines = rawResponse.split('\n').slice(0, 5).join('\n');

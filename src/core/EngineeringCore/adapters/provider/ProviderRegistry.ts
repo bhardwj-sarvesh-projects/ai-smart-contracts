@@ -1,18 +1,42 @@
 export interface ProviderAdapter {
-  id: string; name: string; defaultModel: string; supportedModels: string[];
+  id: string;
+  name: string;
+  defaultModel: string;
+  supportedModels: string[];
 }
-export class OpenAIAdapter implements ProviderAdapter {
-  id = 'openai'; name = 'OpenAI'; defaultModel = 'gpt-4o-mini'; supportedModels = ['gpt-4o-mini', 'gpt-4o', 'o3-mini'];
-}
+
+/** Legacy compatibility adapter. Production execution is server-side Groq routing. */
 export class GroqAdapter implements ProviderAdapter {
-  id = 'groq'; name = 'Groq Cloud'; defaultModel = 'llama-3.3-70b-versatile'; supportedModels = ['llama-3.3-70b-versatile', 'llama3-70b-8192', 'mixtral-8x7b-32768'];
+  id = 'groq';
+  name = 'Groq Intelligent Router';
+  defaultModel = 'platform-router';
+  supportedModels = [
+    'openai/gpt-oss-120b',
+    'qwen/qwen3.6-27b',
+    'openai/gpt-oss-20b',
+    'groq/compound',
+  ];
 }
+
+export class OpenAIAdapter implements ProviderAdapter {
+  id = 'openai';
+  name = 'Legacy / Disabled';
+  defaultModel = 'platform-router';
+  supportedModels: string[] = [];
+}
+
 export class ProviderRegistry {
   private static adapters = new Map<string, ProviderAdapter>();
-  static initialize() { if (this.adapters.size) return; this.adapters.set('openai', new OpenAIAdapter()); this.adapters.set('groq', new GroqAdapter()); }
+  static initialize() {
+    if (this.adapters.size) return;
+    this.adapters.set('groq', new GroqAdapter());
+    this.adapters.set('openai', new OpenAIAdapter());
+  }
   static getAdapter(id: string): ProviderAdapter {
-    this.initialize(); const key = (id || 'openai').toLowerCase().trim(); const adapter = this.adapters.get(key);
-    if (!adapter) throw new Error(`Unsupported AI provider: ${id}. Active providers are OpenAI and Groq.`);
+    this.initialize();
+    const key = (id || 'groq').toLowerCase().trim();
+    const adapter = this.adapters.get(key);
+    if (!adapter) throw new Error(`Unsupported provider: ${id}. AI Contracts uses the Groq Intelligent Router.`);
     return adapter;
   }
   static listAdapters(): ProviderAdapter[] { this.initialize(); return Array.from(this.adapters.values()); }
