@@ -84,21 +84,25 @@ function PipelineDashboard({
     setWalletState(null);
   };
 
-  // Download contract ABI helper
+  // Download ABI only from an actual generated artifact; never fabricate an ABI.
   const handleDownloadABI = () => {
     if (!selectedContract) return;
-    const dummyABI = JSON.stringify([
-      { "inputs": [], "stateMutability": "nonpayable", "type": "constructor" },
-      { "anonymous": false, "inputs": [{ "indexed": true, "internalType": "address", "name": "previousOwner", "type": "address" }], "name": "OwnershipTransferred", "type": "event" },
-      { "inputs": [], "name": "owner", "outputs": [{ "internalType": "address", "name": "", "type": "address" }], "stateMutability": "view", "type": "function" }
-    ], null, 2);
-
-    const blob = new Blob([dummyABI], { type: 'application/json' });
+    const candidates = project.files.filter(f => /\.json$/i.test(f.path));
+    let artifact: any = null;
+    for (const file of candidates) {
+      try {
+        const parsed = JSON.parse(file.content);
+        if (Array.isArray(parsed.abi)) { artifact = parsed; break; }
+      } catch { /* ignore non-JSON files */ }
+    }
+    if (!artifact || !Array.isArray(artifact.abi)) {
+      setWalletError?.('ABI is unavailable because no real compiled artifact with an ABI was found.');
+      return;
+    }
+    const blob = new Blob([JSON.stringify(artifact.abi, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${selectedContract}-abi.json`;
-    link.click();
+    const link = document.createElement('a'); link.href = url; link.download = `${selectedContract}-abi.json`; link.click();
+    URL.revokeObjectURL(url);
   };
 
   // 14 Pipeline Steps as explicitly defined in specification

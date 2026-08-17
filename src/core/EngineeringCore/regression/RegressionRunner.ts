@@ -476,7 +476,10 @@ export class RegressionRunner {
       if (codeFiles.length === 0) {
         return { status: 'FAIL', evidence: [], error: 'Cannot run Security Audit with 0 files' };
       }
-      const secRes = SecurityAuditEngine.certifySecurity(codeFiles, projectName, benchmark.ecosystem);
+      const secRes = SecurityAuditEngine.certifySecurity(
+        codeFiles, projectName, benchmark.ecosystem,
+        { success: compRes.result.success, status: compRes.result.status, verificationMode: compRes.result.verificationMode, exitCode: compRes.result.exitCode }
+      );
       if (!secRes || !secRes.auditResult) {
         return { status: 'FAIL', evidence: [], error: 'SecurityAuditEngine returned null result' };
       }

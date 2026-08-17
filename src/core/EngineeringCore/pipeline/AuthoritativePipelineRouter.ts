@@ -158,7 +158,8 @@ export class AuthoritativePipelineRouter {
       const auditResult = SecurityAuditEngine.certifySecurity(
         certifiedFiles,
         project.name || 'SmartContractProject',
-        project.blockchain
+        project.blockchain,
+        { success: compResult.result.success, status: compResult.result.status, verificationMode: compResult.result.verificationMode, exitCode: compResult.result.exitCode }
       );
       certifiedFiles = auditResult.certifiedFiles;
 
@@ -290,10 +291,18 @@ export class AuthoritativePipelineRouter {
   }
 
   public static async audit(project: StructuredProjectOutput): Promise<any> {
-    return SecurityAuditEngine.certifySecurity(
+    const compilation = CompilerEngine.certifyCompilation(
       project.files || [],
       project.name || 'SmartContractProject',
-      project.blockchain
+      project.blockchain,
+      project.framework,
+      project.language
+    );
+    return SecurityAuditEngine.certifySecurity(
+      compilation.certifiedFiles,
+      project.name || 'SmartContractProject',
+      project.blockchain,
+      { success: compilation.result.success, status: compilation.result.status, verificationMode: compilation.result.verificationMode, exitCode: compilation.result.exitCode }
     );
   }
 

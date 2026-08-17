@@ -650,16 +650,30 @@ app.post("/api/remediate", async (req, res) => {
   const userConfig = getActiveUserConfig(req);
   const { projectId, vulnerability, files } = req.body;
 
-  if (!vulnerability || !files || !Array.isArray(files)) {
-    return res.status(400).json({ error: "Vulnerability and files array are required" });
+  if (!vulnerability || !files || !Array.isArray(files) || files.length === 0) {
+    return res.status(400).json({ error: "Vulnerability object and non-empty files array are required" });
   }
 
   const projectName = "RemediationProject";
-  let currentFiles = [...files];
-  let lastSuccessfulState = [...files]; // Previous known clean state
   const logs: string[] = [];
 
-  logs.push(`[REMEDIATION START] Initiating multi-stage recovery loop for "${vulnerability.title}"`);
+  // Redact any secrets in prompt/context
+  const redactSecrets = (text: string): string => {
+    if (!text) return '';
+    return text
+      .replace(/(?:PRIVATE_KEY|SECRET_KEY|API_KEY|PASSWORD|TOKEN)\s*[:=]\s*["']?[a-zA-Z0-9_.-]{16,}["']?/gi, '[REDACTED_SECRET]')
+      .replace(/0x[a-fA-F0-9]{64}/g, '0x[REDACTED_PRIVATE_KEY]');
+  };
+
+  // State machine: DETECTED -> SNAPSHOT_CREATED -> PATCH_GENERATED -> PATCH_VALIDATED -> PATCH_APPLIED -> COMPILE -> SECURITY RE-AUDIT -> COMMIT
+  logs.push(`[STATE: DETECTED] Initiating authoritative remediation state machine for "${vulnerability.title}"`);
+
+  // 1. Create immutable initial workspace snapshot with pre-patch SHA-256 hashes
+  const initialSnapshot = PatchEngine.createSnapshotWithHashes(files);
+  logs.push(`[STATE: SNAPSHOT_CREATED] Snapshot ${initialSnapshot.snapshotId} created with ${Object.keys(initialSnapshot.hashes).length} file hashes.`);
+
+  let currentFiles = PatchEngine.createSnapshot(initialSnapshot.files);
+  let committedState = PatchEngine.createSnapshot(initialSnapshot.files);
 
   let attempts = 0;
   const maxAttempts = 3;
@@ -669,19 +683,33 @@ app.post("/api/remediate", async (req, res) => {
 
   while (attempts < maxAttempts && !loopSuccess) {
     attempts++;
-    logs.push(`[ATTEMPT ${attempts}/${maxAttempts}] Executing self-healing step...`);
+    logs.push(`[ATTEMPT ${attempts}/${maxAttempts}] Executing remediation cycle...`);
 
-    const fileToFix = vulnerability.file;
-    const affectedFile = currentFiles.find((f: any) => PatchEngine.normalizePath(f.path).toLowerCase() === PatchEngine.normalizePath(fileToFix).toLowerCase());
+    const fileToFix = vulnerability.file || vulnerability.affectedFile;
+    if (!fileToFix) {
+      logs.push(`[ERROR] Vulnerability missing target file path.`);
+      break;
+    }
+
+    const normTarget = PatchEngine.normalizePath(fileToFix).toLowerCase();
+    const affectedFile = currentFiles.find((f: any) => PatchEngine.normalizePath(f.path).toLowerCase() === normTarget);
 
     if (!affectedFile) {
-      const errMsg = `File ${fileToFix} not found in workspace.`;
+      const errMsg = `Target file '${fileToFix}' not found in workspace.`;
       logs.push(`[ERROR] ${errMsg}`);
       break;
     }
 
-    const otherFiles = currentFiles.filter((f: any) => f.path !== affectedFile.path && (f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move')));
-    const contextFilesText = otherFiles.map((f: any) => `### OTHER WORKSPACE FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
+    // Prepare targeted context ONLY (vulnerable file + direct interface/dependency imports, NO reports/secrets)
+    const otherFiles = currentFiles.filter((f: any) => {
+      const norm = PatchEngine.normalizePath(f.path).toLowerCase();
+      if (norm === normTarget) return false;
+      // Include only direct contract/code files, exclude diagnostic reports, metadata, secrets
+      if (norm.startsWith('.diagnostics/') || norm.endsWith('.md') || norm.endsWith('.json') || norm.endsWith('.txt')) return false;
+      return f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move');
+    });
+
+    const contextFilesText = otherFiles.map((f: any) => `### OTHER CODE FILE FOR CONTEXT: ${f.path}\n\`\`\`\n${redactSecrets(f.content)}\n\`\`\`\n`).join("\n");
 
     const remediationPrompt = `
 You are a Principal Smart Contract Security Engineer. Your task is to fix a specific security vulnerability in the following smart contract file.
@@ -691,20 +719,22 @@ Vulnerability Details:
 - Title: ${vulnerability.title}
 - Severity: ${vulnerability.severity}
 - Affected File: ${vulnerability.file}
-- Affected Line: ${vulnerability.line}
-- Affected Function: ${vulnerability.affectedFunction || 'N/A'}
-- Description: ${vulnerability.description}
-- Recommendation: ${vulnerability.recommendation}
+- Affected Line: ${vulnerability.line || vulnerability.lineNumber}
+- Affected Function: ${vulnerability.affectedFunction || vulnerability.function || 'N/A'}
+- Description: ${vulnerability.description || vulnerability.explanation}
+- Recommendation: ${vulnerability.recommendation || vulnerability.recommendedRemediation}
 
-Affected File Content (${vulnerability.file}):
+Target Vulnerable File Content (${vulnerability.file}):
 \`\`\`
-${affectedFile.content}
+${redactSecrets(affectedFile.content)}
 \`\`\`
 
-${contextFilesText ? `Other Workspace Files (for context/imports reference):\n${contextFilesText}` : ''}
+${contextFilesText ? `Workspace Context (Reference only):\n${contextFilesText}` : ''}
 
-You MUST output a precise, targeted fix. Return ONLY the files that need to be modified.
-Do NOT rewrite or alter unrelated parts of the codebase. Return valid code matching the original structure.
+REMEDIATION CONSTRAINTS:
+1. Modify ONLY the target file '${vulnerability.file}'. Do NOT modify or delete unrelated files.
+2. Under NO circumstances produce path traversal ('..'), absolute paths, or modify internal diagnostic files.
+3. Return valid code matching the original language structure.
 
 YOU MUST output a JSON response conforming strictly to this format:
 {
@@ -724,118 +754,188 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 `;
 
     try {
-      logs.push(`[PATCH] Requesting AI patch generation for "${vulnerability.title}" (Attempt ${attempts})...`);
+      // Create cycle attempt snapshot
+      const cycleSnapshot = PatchEngine.createSnapshotWithHashes(currentFiles);
+
+      // STEP 1: PATCH_GENERATED
+      logs.push(`[STATE: PATCH_GENERATED] Requesting AI patch generation for "${vulnerability.title}" (Attempt ${attempts})...`);
       const result = await AIService.editWorkspace(userConfig, remediationPrompt);
       const patchData = result.data;
+
+      if (!patchData || typeof patchData !== 'object') {
+        logs.push(`[WARN] AI returned empty or invalid patch data. Retrying...`);
+        continue;
+      }
+
       lastSummary = patchData.summary || "AI remediation patch generated.";
       finalPatchResult = patchData;
 
-      // Apply patch to current workspace state
-      const patchedFiles = PatchEngine.applyPatch(currentFiles, patchData);
+      // STEP 2: PATCH_VALIDATED & SCOPE CHECK
+      logs.push(`[STATE: PATCH_VALIDATED] Validating patch scope and path safety...`);
+      const scopeCheck = PatchEngine.validatePatchScope(patchData, [fileToFix], cycleSnapshot.files);
+      if (!scopeCheck.valid) {
+        logs.push(`[REJECT: SCOPE_VIOLATION] Patch scope validation failed: ${scopeCheck.reason}`);
+        continue;
+      }
 
-      // --- STEP 2: VALIDATE ---
-      logs.push(`[VALIDATE] Certifying project structure and ecosystem isolation validation...`);
-      const integrity = ProjectIntegrityEngine.certifyProject(
-        patchedFiles,
+      // STEP 3: PATCH_APPLIED_TO_ISOLATED_WORKSPACE
+      logs.push(`[STATE: PATCH_APPLIED_TO_ISOLATED_WORKSPACE] Overlaying patch onto candidate workspace...`);
+      const candidateFiles = PatchEngine.applyPatch(cycleSnapshot.files, patchData);
+
+      // Verify Immutability (no unexpected files changed)
+      const immutabilityCheck = PatchEngine.verifyPatchImmutability(cycleSnapshot.files, candidateFiles, [fileToFix]);
+      if (!immutabilityCheck.valid) {
+        logs.push(`[REJECT: IMMUTABILITY_VIOLATION] Patch immutability check failed: ${immutabilityCheck.reason}`);
+        continue;
+      }
+
+      // STEP 4: COMPILE (REAL CompilerEngine invocation)
+      logs.push(`[STATE: COMPILE] Invoking real CompilerEngine on candidate workspace...`);
+      const compileCert = CompilerEngine.certifyCompilation(
+        candidateFiles,
         projectName,
         vulnerability.blockchain || 'Ethereum/EVM'
       );
 
-      if (integrity.report.overallStatus === 'FAIL') {
-        const warning = `Workspace certification validation failed during integrity checks. Reverting and retrying...`;
-        logs.push(`[WARN] ${warning}`);
-        currentFiles = [...lastSuccessfulState]; // Revert immediately
-        continue;
-      }
-
-      // --- STEP 3: COMPILE ---
-      logs.push(`[COMPILE] Running compiler analysis to ensure no syntax errors or unresolved imports...`);
-      const filesContextForCompile = patchedFiles.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
-      const compilerPrompt = `
-Analyze the following source files and determine if they compile successfully.
-Workspace files:
-${filesContextForCompile}
-Format the response strictly as a JSON object:
-{
-  "success": true|false,
-  "errors": []
-}
-Do NOT output markdown wrappers. Return only raw JSON.
-`;
-      const compileResult = await AIService.compileAnalysis(userConfig, compilerPrompt);
-      const isCompiled = compileResult.data?.success;
+      const compileResult = compileCert.result;
+      const isCompiled = compileResult.success && compileResult.status !== 'NOT_VERIFIED' && compileResult.status !== 'FAIL';
 
       if (!isCompiled) {
-        const errors = (compileResult.data?.errors || []).map((e: any) => `${e.file}:${e.line} - ${e.explanation}`).join('; ');
-        logs.push(`[COMPILE FAIL] Compiler verification failed: ${errors || 'Unknown syntax error'}`);
-        logs.push(`[REVERT] Reverting to previous known clean state immediately. Do not commit broken files.`);
-        currentFiles = [...lastSuccessfulState]; // Revert immediately to previous known clean state
-        continue; // Try next attempt
-      }
-
-      logs.push(`[COMPILE PASS] Compiler verification succeeded with zero warnings and errors.`);
-
-      // --- STEP 4: RE-AUDIT ---
-      logs.push(`[RE-AUDIT] Running security scan on compiled files to ensure vulnerability is fully resolved...`);
-      const auditRes = SecurityAuditEngine.certifySecurity(
-        patchedFiles,
-        projectName,
-        vulnerability.blockchain || 'Ethereum/EVM'
-      );
-
-      const remainingCriticalOrHigh = auditRes.auditResult.findings.filter(f => f.severity === 'Critical' || f.severity === 'High');
-      const hasSpecificVulnRemaining = auditRes.auditResult.findings.some(f => 
-        f.title.toLowerCase().includes(vulnerability.title.toLowerCase()) || 
-        f.id === vulnerability.id
-      );
-
-      if (remainingCriticalOrHigh.length > 0 || hasSpecificVulnRemaining) {
-        logs.push(`[AUDIT FAIL] Re-audit discovered remaining vulnerabilities: ${auditRes.auditResult.findings.map(f => `[${f.severity}] ${f.title}`).join(', ')}`);
-        logs.push(`[REVERT] Reverting and preparing next correction pass.`);
-        currentFiles = [...lastSuccessfulState]; // Revert immediately
+        const diagText = (compileResult.diagnostics || []).map((d: any) => `${d.file || ''}:${d.line || ''} - ${d.message || d.explanation || ''}`).join('; ');
+        logs.push(`[COMPILE FAIL] Real compilation failed: ${diagText || compileResult.stderr || 'Syntax/compilation error'}`);
+        logs.push(`[ROLLBACK] Reverting candidate workspace to snapshot ${cycleSnapshot.snapshotId}...`);
+        
+        currentFiles = PatchEngine.createSnapshot(cycleSnapshot.files);
+        const rb = PatchEngine.verifyRollback(cycleSnapshot.hashes, currentFiles);
+        if (!rb.valid) {
+          logs.push(`[CRITICAL ROLLBACK FAILURE] ${rb.reason}`);
+          return res.status(500).json({ success: false, files: initialSnapshot.files, error: `ROLLBACK_FAILURE: ${rb.reason}`, logs });
+        }
         continue;
       }
 
-      logs.push(`[RE-AUDIT PASS] Re-audit certified zero remaining high/critical vulnerabilities.`);
+      logs.push(`[COMPILE PASS] Real compilation succeeded with zero fatal errors.`);
 
-      // --- STEP 5: COMMIT ---
-      logs.push(`[COMMIT] State verification passed! Committing patched and certified files.`);
-      lastSuccessfulState = [...patchedFiles];
-      currentFiles = [...patchedFiles];
+      // STEP 5: SECURITY RE-AUDIT (REAL SecurityAuditEngine invocation)
+      logs.push(`[STATE: SECURITY RE-AUDIT] Executing real SecurityAuditEngine re-audit on compiled candidate...`);
+      const auditCert = SecurityAuditEngine.certifySecurity(
+        candidateFiles,
+        projectName,
+        vulnerability.blockchain || 'Ethereum/EVM',
+        { success: compileResult.success, status: compileResult.status, verificationMode: compileResult.verificationMode, exitCode: compileResult.exitCode }
+      );
+
+      const auditRes = auditCert.auditResult;
+
+      if (auditRes.status !== 'CERTIFIED_SECURE') {
+        logs.push(`[AUDIT FAIL] Re-audit status was ${auditRes.status}. Reverting patch...`);
+        currentFiles = PatchEngine.createSnapshot(cycleSnapshot.files);
+        const rb = PatchEngine.verifyRollback(cycleSnapshot.hashes, currentFiles);
+        if (!rb.valid) {
+          logs.push(`[CRITICAL ROLLBACK FAILURE] ${rb.reason}`);
+          return res.status(500).json({ success: false, files: initialSnapshot.files, error: `ROLLBACK_FAILURE: ${rb.reason}`, logs });
+        }
+        continue;
+      }
+
+      const remainingCriticalOrHigh = auditRes.findings.filter(f => f.severity === 'Critical' || f.severity === 'High');
+      const targetVulnStillPresent = auditRes.findings.some(f =>
+        f.id === vulnerability.id ||
+        (f.title && vulnerability.title && f.title.toLowerCase().includes(vulnerability.title.toLowerCase()))
+      );
+
+      if (remainingCriticalOrHigh.length > 0 || targetVulnStillPresent) {
+        logs.push(`[AUDIT FAIL] Re-audit found residual vulnerabilities: ${auditRes.findings.map(f => `[${f.severity}] ${f.title}`).join(', ')}`);
+        logs.push(`[ROLLBACK] Reverting candidate workspace to pre-patch state.`);
+        currentFiles = PatchEngine.createSnapshot(cycleSnapshot.files);
+        const rb = PatchEngine.verifyRollback(cycleSnapshot.hashes, currentFiles);
+        if (!rb.valid) {
+          logs.push(`[CRITICAL ROLLBACK FAILURE] ${rb.reason}`);
+          return res.status(500).json({ success: false, files: initialSnapshot.files, error: `ROLLBACK_FAILURE: ${rb.reason}`, logs });
+        }
+        continue;
+      }
+
+      logs.push(`[SECURITY RE-AUDIT PASS] Re-audit certified vulnerability '${vulnerability.title}' is completely resolved.`);
+
+      // STEP 6: COMMIT
+      logs.push(`[STATE: COMMIT] Authoritative validation pipeline passed! Committing patched workspace.`);
+      committedState = PatchEngine.createSnapshot(candidateFiles);
       loopSuccess = true;
       break;
 
     } catch (err: any) {
       logs.push(`[ERROR] Attempt ${attempts} failed with exception: ${err.message || String(err)}`);
-      currentFiles = [...lastSuccessfulState]; // Revert immediately
+      currentFiles = PatchEngine.createSnapshot(initialSnapshot.files);
+      PatchEngine.verifyRollback(initialSnapshot.hashes, currentFiles);
     }
   }
 
   if (loopSuccess) {
-    logs.push(`[SUCCESS] Remediation loop complete. Vulnerability resolved successfully in ${attempts} attempts.`);
+    logs.push(`[SUCCESS] Remediation pipeline completed successfully in ${attempts} attempts.`);
     return res.json({
       success: true,
-      files: lastSuccessfulState,
+      files: committedState,
       patch: finalPatchResult,
       summary: lastSummary,
       logs
     });
   } else {
-    logs.push(`[FAIL] Remediation loop failed to resolve the vulnerability after ${attempts} attempts.`);
+    // Verified Rollback to initial workspace
+    logs.push(`[FAIL] All ${attempts} remediation attempts failed. Restoring initial workspace.`);
+    const restoredFiles = PatchEngine.createSnapshot(initialSnapshot.files);
+    const rbCheck = PatchEngine.verifyRollback(initialSnapshot.hashes, restoredFiles);
+
+    if (!rbCheck.valid) {
+      logs.push(`[CRITICAL ROLLBACK FAILURE] ${rbCheck.reason}`);
+      return res.status(500).json({
+        success: false,
+        files: initialSnapshot.files,
+        error: `ROLLBACK_FAILURE: ${rbCheck.reason}`,
+        logs
+      });
+    }
+
     return res.json({
       success: false,
-      files: lastSuccessfulState, // Reverted to original clean state
-      error: `Self-healing remediation loop failed after ${attempts} attempts.`,
+      files: restoredFiles, // Verified 100% byte-for-byte identical to original
+      error: `Self-healing remediation pipeline failed after ${attempts} attempts. Original workspace safely restored.`,
       logs
     });
   }
 });
 
-function validateAndSanitizeVulnerabilities(vulnerabilities: any[]): void {
+function validateAndSanitizeVulnerabilities(vulnerabilities: any[], files?: any[]): void {
   if (!vulnerabilities || !Array.isArray(vulnerabilities)) {
     return;
   }
-  for (const v of vulnerabilities) {
+  
+  for (let i = vulnerabilities.length - 1; i >= 0; i--) {
+    const v = vulnerabilities[i];
+    if (!v || typeof v !== 'object') {
+      vulnerabilities.splice(i, 1);
+      continue;
+    }
+
+    if (files && files.length > 0) {
+      const check = SecurityAuditEngine.validateFinding(
+        {
+          affectedFile: v.file || v.affectedFile,
+          lineNumbers: [Number(v.line)],
+          codeSnippet: v.snippet || v.codeSnippet,
+          functionName: v.affectedFunction || v.function,
+          severity: v.severity
+        },
+        files
+      );
+
+      if (!check.valid) {
+        console.warn(`[AUDIT SANITIZE] Filtered out invalid finding: ${check.reason}`);
+        vulnerabilities.splice(i, 1);
+        continue;
+      }
+    }
+
     if (!v.file || typeof v.file !== 'string' || v.file.trim() === '' || v.file.toLowerCase() === 'n/a') {
       throw new Error(`Audit finding missing or invalid coordinate "file". Provided: "${v.file}"`);
     }
@@ -890,7 +990,7 @@ app.post("/api/audit", async (req, res) => {
     }
 
     if (filesToAudit.length === 0) {
-      return res.json(previousAudit || { score: 100, vulnerabilities: [], summary: "No modified files to audit." });
+      return res.json(previousAudit || { status: 'NOT_VERIFIED', score: 0, vulnerabilities: [], summary: "No modified files to audit." });
     }
 
     const filesContext = filesToAudit.map((f: any) => `### FILE: ${f.path}\n\`\`\`\n${f.content}\n\`\`\`\n`).join("\n");
@@ -1002,7 +1102,7 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
     }
 
     // Programmatically validate audit coordinates before sending response!
-    validateAndSanitizeVulnerabilities(finalAudit.vulnerabilities);
+    validateAndSanitizeVulnerabilities(finalAudit.vulnerabilities, filesToAudit);
 
     return res.json({
       ...finalAudit,

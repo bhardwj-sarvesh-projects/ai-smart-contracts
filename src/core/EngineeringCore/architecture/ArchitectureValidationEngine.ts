@@ -468,18 +468,18 @@ export class ArchitectureValidationEngine {
     const docFiles = files.filter(f => f.path.endsWith('.md'));
     const testFiles = files.filter(f => f.path.includes('test') || f.path.includes('spec'));
 
-    const businessLogicScore = comparison.coveragePercentage;
-    const architectureScore = files.length >= 3 ? 96 : 75;
-    const extensibilityScore = allCode.includes('interface') || allCode.includes('abstract') || allCode.includes('pub mod') || allCode.includes('module') ? 95 : 80;
-    const maintainabilityScore = !allCode.includes('TODO') && files.length >= 4 ? 96 : 82;
-    const securityDesignScore = !allCode.includes('tx.origin') && (allCode.includes('onlyOwner') || allCode.includes('onlyRole') || allCode.includes('signer') || allCode.includes('ReentrancyGuard')) ? 98 : 75;
-    const modularityScore = files.length >= 4 ? 95 : 70;
-    const storageDesignScore = allCode.includes('mapping') || allCode.includes('struct') || allCode.includes('Account') || allCode.includes('resource') ? 95 : 80;
-    const accessControlScore = allCode.includes('Ownable') || allCode.includes('AccessControl') || allCode.includes('Signer') || allCode.includes('signer::') ? 96 : 70;
-    const eventsScore = allCode.includes('event ') || allCode.includes('emit ') || allCode.includes('event_handle') ? 98 : 65;
-    const testingScore = testFiles.length > 0 ? 95 : 50;
-    const documentationScore = docFiles.length >= 8 ? 100 : Math.round(docFiles.length * 12.5);
-    const deploymentReadinessScore = files.some(f => f.path.includes('DEPLOYMENT') || f.path.includes('deploy')) ? 96 : 70;
+    const businessLogicScore = comparison.totalRequiredRules > 0 ? comparison.coveragePercentage : 0;
+    const architectureScore = Math.round((files.filter(f => f.path.includes('/')).length / Math.max(files.length, 1)) * 100);
+    const extensibilityScore = (allCode.includes('interface') || allCode.includes('abstract') || allCode.includes('pub mod') || allCode.includes('module')) ? 100 : 0;
+    const maintainabilityScore = (!allCode.includes('TODO') && !allCode.includes('FIXME') && files.length >= 2) ? 100 : 0;
+    const securityDesignScore = (!allCode.includes('tx.origin') && (allCode.includes('onlyOwner') || allCode.includes('onlyRole') || allCode.includes('signer') || allCode.includes('ReentrancyGuard'))) ? 100 : 0;
+    const modularityScore = files.length >= 4 ? 100 : Math.round((files.length / 4) * 100);
+    const storageDesignScore = (allCode.includes('mapping') || allCode.includes('struct') || allCode.includes('Account') || allCode.includes('resource')) ? 100 : 0;
+    const accessControlScore = (allCode.includes('Ownable') || allCode.includes('AccessControl') || allCode.includes('Signer') || allCode.includes('signer::')) ? 100 : 0;
+    const eventsScore = (allCode.includes('event ') || allCode.includes('emit ') || allCode.includes('event_handle')) ? 100 : 0;
+    const testingScore = testFiles.length > 0 ? 100 : 0;
+    const documentationScore = Math.min(100, docFiles.length * 12.5);
+    const deploymentReadinessScore = files.some(f => f.path.includes('DEPLOYMENT') || f.path.includes('deploy')) ? 100 : 0;
 
     const overallScore = Math.round(
       (businessLogicScore * 0.25) +

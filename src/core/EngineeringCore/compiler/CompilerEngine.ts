@@ -93,16 +93,8 @@ export class CompilerEngine {
   public static spawnSyncFn = spawnSync;
 
   private static computeSha256(content: string): string {
-    if (crypto) {
-      return crypto.createHash('sha256').update(content).digest('hex');
-    }
-    // Simple robust fallback
-    let hash = 0;
-    for (let i = 0; i < content.length; i++) {
-      hash = (hash << 5) - hash + content.charCodeAt(i);
-      hash |= 0;
-    }
-    return 'hash-' + Math.abs(hash);
+    if (!crypto) throw new Error('CRYPTO_UNAVAILABLE: SHA-256 evidence cannot be produced in this runtime.');
+    return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
   }
 
   /**
@@ -475,6 +467,14 @@ export class CompilerEngine {
     return 'forge';
   }
 
+  private static resolveHardhatBinary(workspacePath: string): { binary: string; args: string[] } | null {
+    if (!fs || !path) return null;
+    const name = process.platform === 'win32' ? 'hardhat.cmd' : 'hardhat';
+    const localBin = path.join(workspacePath, 'node_modules', '.bin', name);
+    try { if (fs.existsSync(localBin)) return { binary: localBin, args: ['--version'] }; } catch {}
+    return null;
+  }
+
   public static isBinaryAvailable(binary: string, args: string[] = ['--version']): boolean {
     const spawnSyncFn = this.spawnSyncFn || spawnSync;
     if (!spawnSyncFn) return false;
@@ -524,13 +524,16 @@ export class CompilerEngine {
         detectedVersion = (vRes.stdout || '').trim();
       }
     } else if (compiler === 'hardhat') {
-      binary = 'npx';
-      args = ['hardhat', 'compile'];
-      isAvailable = this.isBinaryAvailable(binary, ['hardhat', '--version']);
-      if (isAvailable && spawnSyncFn) {
-        const vRes = spawnSyncFn(binary, ['hardhat', '--version'], { encoding: 'utf8' });
-        detectedVersion = (vRes.stdout || '').trim();
-      }
+      const resolved = this.resolveHardhatBinary(workspacePath);
+      if (resolved) {
+        binary = resolved.binary;
+        args = ['compile'];
+        isAvailable = this.isBinaryAvailable(binary, ['--version']);
+        if (isAvailable && spawnSyncFn) {
+          const vRes = spawnSyncFn(binary, ['--version'], { encoding: 'utf8', cwd: workspacePath });
+          detectedVersion = (vRes.stdout || '').trim();
+        }
+      } else { binary = 'hardhat'; args = ['compile']; isAvailable = false; }
     } else if (compiler === 'anchor') {
       binary = 'anchor';
       args = ['build'];

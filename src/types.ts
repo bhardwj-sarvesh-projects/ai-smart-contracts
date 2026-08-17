@@ -4,6 +4,8 @@ export interface ProjectFile {
   language: string;
 }
 
+export type { ExportCertificationResult } from './core/EngineeringCore/export/ExportEngine';
+
 export interface SmartContractTemplate {
   id: string;
   name: string;

@@ -1,4 +1,5 @@
 import { ProjectFile } from '../../../types';
+import { ExportCertificationResult } from '../export/ExportEngine';
 import { sha256 } from '../utils/cryptoFallback';
 import { CompilationResult } from '../compiler/CompilerEngine';
 import { TestingValidationResult } from '../testing/TestingValidationEngine';
@@ -7,7 +8,6 @@ import { DependencyValidationResult } from '../validators/DependencyValidationEn
 import { ArchitectureValidationResult } from '../architecture/ArchitectureValidationEngine';
 import { DocumentationCertificationResult } from '../documentation/DocumentationEngine';
 import { DeploymentResult } from '../deployment/DeploymentEngine';
-import { ExportCertificationResult } from '../export/ExportEngine';
 
 export type GateVerificationStatus = 'PASS' | 'FAIL' | 'NOT_VERIFIED';
 
@@ -107,7 +107,6 @@ export interface EngineeringCertificationResult {
 }
 
 export class EngineeringCertificationEngine {
-
   public static generateUuid(): string {
     const randomHex = Array.from({ length: 16 }, () =>
       Math.floor(Math.random() * 16).toString(16)
@@ -144,7 +143,7 @@ export class EngineeringCertificationEngine {
 
     const hasRootFiles = files.some(f => f.path.includes('/')) || files.length >= 2;
     const hasNoEmptyFiles = files.every(f => f.content && f.content.trim().length > 0);
-    
+
     let hasLeakage = false;
     let leakageDetails = '';
     const codeFiles = files.filter(f => f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move'));
@@ -316,10 +315,9 @@ export class EngineeringCertificationEngine {
       securityAuditResult &&
       (securityAuditResult.reportMarkdown || securityAuditResult.findings || securityAuditResult.timestamp || securityAuditResult.analysisTimestamp)
     );
-
     const criticals = securityAuditResult.criticalCount ?? (securityAuditResult as any).criticalFindings ?? 0;
     const highs = securityAuditResult.highCount ?? (securityAuditResult as any).highFindings ?? 0;
-    const isPassStatus = securityAuditResult.overallStatus === 'PASS';
+    const isPassStatus = securityAuditResult.status === 'CERTIFIED_SECURE' && securityAuditResult.verified === true;
 
     if (!hasAuditEvidence) {
       return {
@@ -367,7 +365,6 @@ export class EngineeringCertificationEngine {
       architectureResult.comparison &&
       architectureResult.scoreBreakdown
     );
-
     const isPassStatus = architectureResult.architecturePassed === true || architectureResult.status === 'PASS';
 
     if (isPassStatus && hasAuthoritativeEvidence) {
@@ -413,10 +410,9 @@ export class EngineeringCertificationEngine {
     const hasAuthoritativeEvidence = !!(
       documentationResult &&
       (documentationResult.docReportGenerated === true ||
-       documentationResult.knowledgeIndexGenerated === true ||
-       (documentationResult.reportMarkdown && documentationResult.certifiedFiles && documentationResult.certifiedFiles.length > 0))
+        documentationResult.knowledgeIndexGenerated === true ||
+        (documentationResult.reportMarkdown && documentationResult.certifiedFiles && documentationResult.certifiedFiles.length > 0))
     );
-
     const isPassStatus = documentationResult.documentationPassed === true || documentationResult.status === 'PASS';
 
     if (isPassStatus && hasAuthoritativeEvidence) {
@@ -463,8 +459,7 @@ export class EngineeringCertificationEngine {
       deploymentResult &&
       (deploymentResult.deploymentId || deploymentResult.reportMarkdown || deploymentResult.stateHistory || deploymentResult.state)
     );
-
-    const isPassStatus = deploymentResult.state === 'COMPLETED' || deploymentResult.status === 'PASS';
+    const isPassStatus = (deploymentResult.state === 'COMPLETED' || deploymentResult.status === 'PASS' || deploymentResult.preChecks?.passed === true) && !!(deploymentResult.reportMarkdown || deploymentResult.preChecks);
 
     if (isPassStatus && hasAuthoritativeEvidence) {
       return {
@@ -472,7 +467,7 @@ export class EngineeringCertificationEngine {
         status: 'PASS',
         passed: true,
         score: 100,
-        details: 'Deployment configuration and assets verified.'
+        details: deploymentResult.state === 'COMPLETED' ? 'Actual deployment execution evidence verified.' : 'Deployment readiness pre-check evidence verified; no on-chain deployment is claimed.'
       };
     }
 
@@ -495,10 +490,7 @@ export class EngineeringCertificationEngine {
     };
   }
 
-  public static collectExportResults(
-    exportResult?: ExportCertificationResult | any,
-    authoritativeGates?: Record<string, any>
-  ): GateStatus {
+  public static collectExportResults(exportResult?: ExportCertificationResult | any, authoritativeGates?: Record<string, any>): GateStatus {
     if (!exportResult) {
       return {
         name: 'Export Certification Engine',
@@ -549,7 +541,6 @@ export class EngineeringCertificationEngine {
       };
     }
 
-    // Require exportCertified === true
     if (exportResult.exportCertified !== true) {
       return {
         name: 'Export Certification Engine',
@@ -560,7 +551,6 @@ export class EngineeringCertificationEngine {
       };
     }
 
-    // Require exportedFiles array
     if (!exportResult.exportedFiles || !Array.isArray(exportResult.exportedFiles) || exportResult.exportedFiles.length === 0) {
       return {
         name: 'Export Certification Engine',
@@ -571,7 +561,6 @@ export class EngineeringCertificationEngine {
       };
     }
 
-    // Require manifestJson string
     if (typeof exportResult.manifestJson !== 'string' || exportResult.manifestJson.trim().length === 0) {
       return {
         name: 'Export Certification Engine',
@@ -582,7 +571,6 @@ export class EngineeringCertificationEngine {
       };
     }
 
-    // Require checksumsTxt string
     if (typeof exportResult.checksumsTxt !== 'string' || exportResult.checksumsTxt.trim().length === 0) {
       return {
         name: 'Export Certification Engine',
@@ -593,16 +581,76 @@ export class EngineeringCertificationEngine {
       };
     }
 
-    // Path normalization helper
     const normalizePath = (p: string): string => {
       let np = p.replace(/\\/g, '/');
-      if (np.startsWith('./')) {
-        np = np.substring(2);
-      }
+      if (np.startsWith('./')) np = np.substring(2);
       return np;
     };
 
-    // 1. MANIFEST JSON VALIDATION
+    // ISSUE 2 — MANIFEST.json file content in exportedFiles MUST match exportResult.manifestJson
+    const manifestFiles = exportResult.exportedFiles.filter((f: any) =>
+      normalizePath(f.path).toUpperCase() === 'MANIFEST.JSON'
+    );
+    if (manifestFiles.length === 0) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Missing MANIFEST.json in exported files.'
+      };
+    }
+    if (manifestFiles.length > 1) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Duplicate MANIFEST.json files found in exported files.'
+      };
+    }
+    if (manifestFiles[0].content !== exportResult.manifestJson) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'FAIL',
+        passed: false,
+        score: 0,
+        details: 'MANIFEST.json file content in exportedFiles does not match exportResult.manifestJson.'
+      };
+    }
+
+    // ISSUE 3 — CHECKSUMS.txt file content in exportedFiles MUST match exportResult.checksumsTxt
+    const checksumFiles = exportResult.exportedFiles.filter((f: any) =>
+      normalizePath(f.path).toUpperCase() === 'CHECKSUMS.TXT'
+    );
+    if (checksumFiles.length === 0) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Missing CHECKSUMS.txt in exported files.'
+      };
+    }
+    if (checksumFiles.length > 1) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Duplicate CHECKSUMS.txt files found in exported files.'
+      };
+    }
+    if (checksumFiles[0].content !== exportResult.checksumsTxt) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'FAIL',
+        passed: false,
+        score: 0,
+        details: 'CHECKSUMS.txt file content in exportedFiles does not match exportResult.checksumsTxt.'
+      };
+    }
+
     let manifest: any;
     try {
       manifest = JSON.parse(exportResult.manifestJson);
@@ -629,7 +677,7 @@ export class EngineeringCertificationEngine {
     const exportedPaths = exportResult.exportedFiles.map((f: any) => f.path);
     const seenPaths = new Set<string>();
     for (const p of exportedPaths) {
-      const norm = normalizePath(p);
+      const norm = normalizePath(p).toLowerCase();
       if (seenPaths.has(norm)) {
         return {
           name: 'Export Certification Engine',
@@ -663,8 +711,27 @@ export class EngineeringCertificationEngine {
       };
     }
 
-    const exportedPathsNormalized = new Set<string>(exportedPaths.map(normalizePath));
-    const manifestHashesKeysNormalized = new Set<string>(manifestHashesKeys.map(normalizePath));
+    const isMetaFile = (p: string): boolean => {
+      const norm = normalizePath(p).toUpperCase();
+      return norm === 'MANIFEST.JSON' || norm === 'CHECKSUMS.TXT';
+    };
+
+    if (manifestHashesKeys.some(p => isMetaFile(p))) {
+      return {
+        name: 'Export Certification Engine',
+        status: 'NOT_VERIFIED',
+        passed: false,
+        score: 0,
+        details: 'Manifest hashes must not contain MANIFEST.json or CHECKSUMS.txt.'
+      };
+    }
+
+    const coreExportedPathsNormalized = new Set<string>(
+      exportedPaths.map(p => normalizePath(p).toLowerCase()).filter(p => !isMetaFile(p))
+    );
+    const manifestHashesKeysNormalized = new Set<string>(
+      manifestHashesKeys.map(p => normalizePath(p).toLowerCase())
+    );
 
     if (manifestHashesKeysNormalized.size !== manifestHashesKeys.length) {
       return {
@@ -676,19 +743,18 @@ export class EngineeringCertificationEngine {
       };
     }
 
-    if (exportedPathsNormalized.size !== manifestHashesKeysNormalized.size) {
+    if (coreExportedPathsNormalized.size !== manifestHashesKeysNormalized.size) {
       return {
         name: 'Export Certification Engine',
         status: 'NOT_VERIFIED',
         passed: false,
         score: 0,
-        details: 'Manifest file count matches count mismatch.'
+        details: `Integrity verification mismatch: Package holds ${coreExportedPathsNormalized.size} core files, but manifest indexes ${manifestHashesKeysNormalized.size}.`
       };
     }
 
-    // Every manifest file entry exists in exportedFiles
     for (const p of manifestHashesKeysNormalized) {
-      if (!exportedPathsNormalized.has(p)) {
+      if (!coreExportedPathsNormalized.has(p)) {
         return {
           name: 'Export Certification Engine',
           status: 'NOT_VERIFIED',
@@ -699,8 +765,7 @@ export class EngineeringCertificationEngine {
       }
     }
 
-    // Every exported file is represented in the manifest
-    for (const p of exportedPathsNormalized) {
+    for (const p of coreExportedPathsNormalized) {
       if (!manifestHashesKeysNormalized.has(p)) {
         return {
           name: 'Export Certification Engine',
@@ -712,13 +777,82 @@ export class EngineeringCertificationEngine {
       }
     }
 
-    // Check optional lists in manifest if present
-    const manifestLists = [
-      manifest.artifacts,
-      manifest.reports,
-      manifest.documentation,
-      manifest.diagrams
-    ];
+    // Cryptographic validation of every manifest hash entry
+    const exportedFileMap = new Map<string, any>();
+    for (const f of exportResult.exportedFiles) {
+      exportedFileMap.set(normalizePath(f.path).toLowerCase(), f);
+    }
+
+    for (const [rawPath, declaredHash] of Object.entries(manifest.hashes)) {
+      const normPath = normalizePath(rawPath).toLowerCase();
+
+      if (isMetaFile(normPath)) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Forbidden meta file '${rawPath}' found in manifest hashes.`
+        };
+      }
+
+      if (typeof declaredHash !== 'string') {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Manifest hash value for '${rawPath}' is not a string.`
+        };
+      }
+
+      const declaredHashTrimmed = (declaredHash as string).trim();
+      if (!/^[a-fA-F0-9]{64}$/.test(declaredHashTrimmed)) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Manifest hash format for '${rawPath}' is invalid (must be exactly 64 hexadecimal characters).`
+        };
+      }
+
+      const actualFile = exportedFileMap.get(normPath);
+      if (!actualFile) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Manifest lists file '${rawPath}' which does not exist in exported files.`
+        };
+      }
+
+      let actualHash: string;
+      try {
+        actualHash = sha256(actualFile.content).toLowerCase();
+      } catch (e) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: `Failed to compute SHA-256 for '${rawPath}'.`
+        };
+      }
+
+      if (actualHash !== declaredHashTrimmed.toLowerCase()) {
+        return {
+          name: 'Export Certification Engine',
+          status: 'FAIL',
+          passed: false,
+          score: 0,
+          details: `Manifest hash mismatch for '${rawPath}': calculated ${actualHash}, declared ${declaredHashTrimmed.toLowerCase()}`
+        };
+      }
+    }
+
+    const manifestLists = [manifest.artifacts, manifest.reports, manifest.documentation, manifest.diagrams];
     for (const list of manifestLists) {
       if (Array.isArray(list)) {
         const listSeen = new Set<string>();
@@ -732,7 +866,7 @@ export class EngineeringCertificationEngine {
               details: 'Manifest file list contains non-string entry.'
             };
           }
-          const norm = normalizePath(p);
+          const norm = normalizePath(p).toLowerCase();
           if (listSeen.has(norm)) {
             return {
               name: 'Export Certification Engine',
@@ -743,8 +877,8 @@ export class EngineeringCertificationEngine {
             };
           }
           listSeen.add(norm);
-
-          if (!exportedPathsNormalized.has(norm)) {
+          const exportedPathsLower = new Set(exportedPaths.map(ep => normalizePath(ep).toLowerCase()));
+          if (!exportedPathsLower.has(norm)) {
             return {
               name: 'Export Certification Engine',
               status: 'NOT_VERIFIED',
@@ -761,7 +895,6 @@ export class EngineeringCertificationEngine {
     const checksumPaths = new Set<string>();
     const checksumMap = new Map<string, string>();
     const lines = exportResult.checksumsTxt.split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
-
     if (lines.length === 0) {
       return {
         name: 'Export Certification Engine',
@@ -785,7 +918,16 @@ export class EngineeringCertificationEngine {
       }
       const hash = match[1].toLowerCase();
       const path = match[2];
-      const normPath = normalizePath(path);
+      const normPath = normalizePath(path).toLowerCase();
+      if (normPath.toUpperCase() === 'CHECKSUMS.TXT') {
+        return {
+          name: 'Export Certification Engine',
+          status: 'NOT_VERIFIED',
+          passed: false,
+          score: 0,
+          details: 'CHECKSUMS.txt must not contain its own checksum entry.'
+        };
+      }
       if (checksumPaths.has(normPath)) {
         return {
           name: 'Export Certification Engine',
@@ -799,7 +941,10 @@ export class EngineeringCertificationEngine {
       checksumMap.set(normPath, hash);
     }
 
-    if (checksumPaths.size !== exportResult.exportedFiles.length) {
+    const hasChecksumsFileInExported = exportResult.exportedFiles.some((f: any) => normalizePath(f.path).toUpperCase() === 'CHECKSUMS.TXT');
+    const expectedChecksumCount = hasChecksumsFileInExported ? exportResult.exportedFiles.length - 1 : exportResult.exportedFiles.length;
+
+    if (checksumPaths.size !== expectedChecksumCount) {
       return {
         name: 'Export Certification Engine',
         status: 'NOT_VERIFIED',
@@ -810,7 +955,8 @@ export class EngineeringCertificationEngine {
     }
 
     for (const file of exportResult.exportedFiles) {
-      const normPath = normalizePath(file.path);
+      const normPath = normalizePath(file.path).toLowerCase();
+      if (normPath.toUpperCase() === 'CHECKSUMS.TXT') continue;
       if (!checksumMap.has(normPath)) {
         return {
           name: 'Export Certification Engine',
@@ -833,7 +979,6 @@ export class EngineeringCertificationEngine {
       }
     }
 
-    // Require validationGatesPassed non-null object
     if (!exportResult.validationGatesPassed || typeof exportResult.validationGatesPassed !== 'object') {
       return {
         name: 'Export Certification Engine',
@@ -844,18 +989,7 @@ export class EngineeringCertificationEngine {
       };
     }
 
-    const requiredGates = [
-      'workspace',
-      'integrity',
-      'dependencies',
-      'compiler',
-      'security',
-      'deployment',
-      'architecture',
-      'testing',
-      'documentation'
-    ];
-
+    const requiredGates = ['workspace', 'integrity', 'dependencies', 'compiler', 'security', 'deployment', 'architecture', 'testing', 'documentation'];
     for (const gate of requiredGates) {
       if (!(gate in exportResult.validationGatesPassed) || exportResult.validationGatesPassed[gate] === undefined) {
         return {
@@ -866,7 +1000,6 @@ export class EngineeringCertificationEngine {
           details: `Export package validation gate evidence incomplete: missing required gate '${gate}' (NOT_VERIFIED).`
         };
       }
-
       const value = exportResult.validationGatesPassed[gate];
       if (typeof value !== 'boolean') {
         return {
@@ -877,7 +1010,6 @@ export class EngineeringCertificationEngine {
           details: `Export package validation gate '${gate}' value is not a boolean (NOT_VERIFIED).`
         };
       }
-
       if (value === false) {
         return {
           name: 'Export Certification Engine',
@@ -889,13 +1021,11 @@ export class EngineeringCertificationEngine {
       }
     }
 
-    // 3. VALIDATION GATE SUMMARY MUST MATCH AUTHORITATIVE GATES
     if (authoritativeGates) {
       for (const gate of requiredGates) {
         const authGate = authoritativeGates[gate];
         const authPassed = authGate && authGate.status === 'PASS';
         const summaryPassed = exportResult.validationGatesPassed[gate];
-
         if (summaryPassed === true && !authPassed) {
           const authStatus = authGate ? authGate.status : 'NOT_VERIFIED';
           if (authStatus === 'FAIL') {
@@ -931,16 +1061,12 @@ export class EngineeringCertificationEngine {
   public static calculateCertificationScore(gates: ValidationCollectorResults): number {
     const gateList = Object.values(gates);
     const passedCount = gateList.filter(g => g.status === 'PASS').length;
+
     return Math.round((passedCount / gateList.length) * 100);
   }
 
-  public static calculateOverallGrade(
-    score: number,
-    allGatesPassed: boolean
-  ): 'A+' | 'A' | 'B' | 'C' | 'D' | 'F' {
-    if (!allGatesPassed) {
-      return 'F';
-    }
+  public static calculateOverallGrade(score: number, allGatesPassed: boolean): 'A+' | 'A' | 'B' | 'C' | 'D' | 'F' {
+    if (!allGatesPassed) return 'F';
     if (score >= 97) return 'A+';
     if (score >= 90) return 'A';
     if (score >= 80) return 'B';
@@ -958,11 +1084,10 @@ export class EngineeringCertificationEngine {
     evidence: any
   ): string {
     return `# Executive Certification Summary for ${projectName}
-
 **Certification ID:** ${certificationId}
 **Overall Engineering Grade:** ${grade} (Certification Score: ${score}/100)
 **Certification Status:** ${status}
-**Client Delivery Status:** ${status === 'CERTIFIED' ? '✅ CERTIFIED & APPROVED FOR CLIENT DELIVERY' : status === 'FAILED' ? '❌ BLOCKED - GATES FAILED' : '⚠️ BLOCKED - EVIDENCE MISSING OR UNVERIFIED'}
+**Client Delivery Status:** ${status === 'CERTIFIED' ? '■ CERTIFIED & APPROVED FOR CLIENT DELIVERY' : status === 'FAILED' ? '■ BLOCKED - GATES FAILED' : '■■ BLOCKED - EVIDENCE MISSING OR UNVERIFIED'}
 **Timestamp:** ${new Date().toISOString()}
 
 ## Execution Evidence Summary
@@ -973,10 +1098,7 @@ export class EngineeringCertificationEngine {
 `;
   }
 
-  public static generateEvidenceManifest(
-    files: ProjectFile[],
-    certData: CertificationData
-  ): string {
+  public static generateEvidenceManifest(files: ProjectFile[], certData: CertificationData): string {
     const manifest = {
       certificationId: certData.certificationId,
       projectId: certData.projectId,
@@ -996,13 +1118,11 @@ export class EngineeringCertificationEngine {
         return acc;
       }, {} as Record<string, string>)
     };
-
     return JSON.stringify(manifest, null, 2);
   }
 
   public static generateEngineeringCertificate(certData: CertificationData): string {
     return `# Enterprise Engineering Certificate of Quality & Release Readiness
-
 **Project Name:** ${certData.projectName}
 **Project ID:** ${certData.projectId}
 **Certification ID:** ${certData.certificationId}
@@ -1013,7 +1133,6 @@ export class EngineeringCertificationEngine {
 ---
 
 ## 1. Executive Certification Overview
-
 | Metric | Certified Value |
 | :--- | :--- |
 | **Overall Engineering Grade** | **${certData.overallGrade}** |
@@ -1029,19 +1148,18 @@ export class EngineeringCertificationEngine {
 ---
 
 ## 3. Comprehensive Validation Gate Matrix
-
 | Gate Dimension | Status | Score | Verification Detail |
-| :--- | :---: | :---: | :--- |
-| **1. Workspace Preservation** | ${certData.gates.workspace.status === 'PASS' ? '✅ PASS' : certData.gates.workspace.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.workspace.score}/100 | ${certData.gates.workspace.details} |
-| **2. Project Integrity** | ${certData.gates.integrity.status === 'PASS' ? '✅ PASS' : certData.gates.integrity.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.integrity.score}/100 | ${certData.gates.integrity.details} |
-| **3. Dependency Validation** | ${certData.gates.dependencies.status === 'PASS' ? '✅ PASS' : certData.gates.dependencies.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.dependencies.score}/100 | ${certData.gates.dependencies.details} |
-| **4. Compiler Intelligence** | ${certData.gates.compiler.status === 'PASS' ? '✅ PASS' : certData.gates.compiler.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.compiler.score}/100 | ${certData.gates.compiler.details} |
-| **5. Enterprise Security Audit** | ${certData.gates.security.status === 'PASS' ? '✅ PASS' : certData.gates.security.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.security.score}/100 | ${certData.gates.security.details} |
-| **6. Deployment Readiness** | ${certData.gates.deployment.status === 'PASS' ? '✅ PASS' : certData.gates.deployment.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.deployment.score}/100 | ${certData.gates.deployment.details} |
-| **7. Architecture Logic Mapping**| ${certData.gates.architecture.status === 'PASS' ? '✅ PASS' : certData.gates.architecture.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.architecture.score}/100 | ${certData.gates.architecture.details} |
-| **8. Testing & QA Verification** | ${certData.gates.testing.status === 'PASS' ? '✅ PASS' : certData.gates.testing.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.testing.score}/100 | ${certData.gates.testing.details} |
-| **9. Documentation Suite** | ${certData.gates.documentation.status === 'PASS' ? '✅ PASS' : certData.gates.documentation.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.documentation.score}/100 | ${certData.gates.documentation.details} |
-| **10. Export Package Certification**| ${certData.gates.exportGate.status === 'PASS' ? '✅ PASS' : certData.gates.exportGate.status === 'NOT_VERIFIED' ? '⚠️ NOT_VERIFIED' : '❌ FAIL'} | ${certData.gates.exportGate.score}/100 | ${certData.gates.exportGate.details} |
+| :--- | :--- | :--- | :--- |
+| **1. Workspace Preservation** | ${certData.gates.workspace.status === 'PASS' ? '■ PASS' : certData.gates.workspace.status === 'NOT_VERIFIED' ? '■■ NOT_VERIFIED' : '■ FAIL'} | ${certData.gates.workspace.score}/100 | ${certData.gates.workspace.details} |
+| **2. Project Integrity** | ${certData.gates.integrity.status === 'PASS' ? '■ PASS' : certData.gates.integrity.status === 'NOT_VERIFIED' ? '■■ NOT_VERIFIED' : '■ FAIL'} | ${certData.gates.integrity.score}/100 | ${certData.gates.integrity.details} |
+| **3. Dependency Validation** | ${certData.gates.dependencies.status === 'PASS' ? '■ PASS' : certData.gates.dependencies.status === 'NOT_VERIFIED' ? '■■ NOT_VERIFIED' : '■ FAIL'} | ${certData.gates.dependencies.score}/100 | ${certData.gates.dependencies.details} |
+| **4. Compiler Intelligence** | ${certData.gates.compiler.status === 'PASS' ? '■ PASS' : certData.gates.compiler.status === 'NOT_VERIFIED' ? '■■ NOT_VERIFIED' : '■ FAIL'} | ${certData.gates.compiler.score}/100 | ${certData.gates.compiler.details} |
+| **5. Enterprise Security Audit** | ${certData.gates.security.status === 'PASS' ? '■ PASS' : certData.gates.security.status === 'NOT_VERIFIED' ? '■■ NOT_VERIFIED' : '■ FAIL'} | ${certData.gates.security.score}/100 | ${certData.gates.security.details} |
+| **6. Deployment Readiness** | ${certData.gates.deployment.status === 'PASS' ? '■ PASS' : certData.gates.deployment.status === 'NOT_VERIFIED' ? '■■ NOT_VERIFIED' : '■ FAIL'} | ${certData.gates.deployment.score}/100 | ${certData.gates.deployment.details} |
+| **7. Architecture Logic Mapping** | ${certData.gates.architecture.status === 'PASS' ? '■ PASS' : certData.gates.architecture.status === 'NOT_VERIFIED' ? '■■ NOT_VERIFIED' : '■ FAIL'} | ${certData.gates.architecture.score}/100 | ${certData.gates.architecture.details} |
+| **8. Testing & QA Verification** | ${certData.gates.testing.status === 'PASS' ? '■ PASS' : certData.gates.testing.status === 'NOT_VERIFIED' ? '■■ NOT_VERIFIED' : '■ FAIL'} | ${certData.gates.testing.score}/100 | ${certData.gates.testing.details} |
+| **9. Documentation Suite** | ${certData.gates.documentation.status === 'PASS' ? '■ PASS' : certData.gates.documentation.status === 'NOT_VERIFIED' ? '■■ NOT_VERIFIED' : '■ FAIL'} | ${certData.gates.documentation.score}/100 | ${certData.gates.documentation.details} |
+| **10. Export Package Certification** | ${certData.gates.exportGate.status === 'PASS' ? '■ PASS' : certData.gates.exportGate.status === 'NOT_VERIFIED' ? '■■ NOT_VERIFIED' : '■ FAIL'} | ${certData.gates.exportGate.score}/100 | ${certData.gates.exportGate.details} |
 
 ---
 `;
@@ -1075,7 +1193,6 @@ export class EngineeringCertificationEngine {
     const compiler = compilationResult?.compilerVersion || options?.compilerVersion || 'UNKNOWN';
     const language = options?.language || (compilationResult as any)?.language || 'UNKNOWN';
 
-    // Collect validation gate results strictly from evidence
     const gates: ValidationCollectorResults = {
       workspace: this.collectWorkspaceStatus(files),
       integrity: this.collectProjectIntegrityStatus(files),
@@ -1092,22 +1209,15 @@ export class EngineeringCertificationEngine {
     gates.exportGate = this.collectExportResults(exportResult, gates);
 
     const gateArray = Object.values(gates);
-
     const hasFail = gateArray.some(g => g.status === 'FAIL');
-    const hasNotVerified = gateArray.some(g => g.status === 'NOT_VERIFIED');
     const allGatesPassed = gateArray.every(g => g.status === 'PASS');
 
     let status: 'CERTIFIED' | 'FAILED' | 'NOT_VERIFIED';
-    if (allGatesPassed) {
-      status = 'CERTIFIED';
-    } else if (hasFail) {
-      status = 'FAILED';
-    } else {
-      status = 'NOT_VERIFIED';
-    }
+    if (allGatesPassed) status = 'CERTIFIED';
+    else if (hasFail) status = 'FAILED';
+    else status = 'NOT_VERIFIED';
 
     const isCertified = status === 'CERTIFIED';
-
     const score = this.calculateCertificationScore(gates);
     const grade = this.calculateOverallGrade(score, allGatesPassed);
 
@@ -1121,17 +1231,9 @@ export class EngineeringCertificationEngine {
       return acc;
     }, {} as Record<string, string>);
 
-    const compilerExitStatus = compilationResult && typeof compilationResult.exitCode === 'number'
-      ? `${compilationResult.exitCode} (${compilationResult.exitCode === 0 ? 'SUCCESS' : 'FAILED'})`
-      : 'UNKNOWN';
-
-    const testExitStatus = testingResult && typeof testingResult.exitStatus === 'number'
-      ? `${testingResult.exitStatus} (${testingResult.exitStatus === 0 ? 'SUCCESS' : 'FAILED'})`
-      : 'UNKNOWN';
-
-    const testCommand = testingResult?.evidence?.command
-      ? testingResult.evidence.command
-      : 'UNKNOWN';
+    const compilerExitStatus = compilationResult && typeof compilationResult.exitCode === 'number' ? `${compilationResult.exitCode} (${compilationResult.exitCode === 0 ? 'SUCCESS' : 'FAILED'})` : 'UNKNOWN';
+    const testExitStatus = testingResult && typeof testingResult.exitStatus === 'number' ? `${testingResult.exitStatus} (${testingResult.exitStatus === 0 ? 'SUCCESS' : 'FAILED'})` : 'UNKNOWN';
+    const testCommand = testingResult?.evidence?.command ? testingResult.evidence.command : 'UNKNOWN';
 
     const executionEvidence = {
       timestamp,
@@ -1159,17 +1261,12 @@ export class EngineeringCertificationEngine {
       durationMs: (
         g.name.includes('Compiler') ? (compilationResult?.durationMs ?? null) :
         g.name.includes('Testing') ? (testingResult?.evidence?.durationMs ?? null) :
-        g.name.includes('Security') ? ((securityAuditResult as any)?.analysisDurationMs ?? null) :
-        null
+        g.name.includes('Security') ? ((securityAuditResult as any)?.analysisDurationMs ?? null) : null
       ),
       status: g.status
     }));
 
-    const clientDeliveryStatus = isCertified
-      ? 'CERTIFIED & APPROVED FOR CLIENT DELIVERY'
-      : hasFail
-      ? 'BLOCKED - GATES FAILED'
-      : 'BLOCKED - EVIDENCE MISSING OR UNVERIFIED';
+    const clientDeliveryStatus = isCertified ? 'CERTIFIED & APPROVED FOR CLIENT DELIVERY' : hasFail ? 'BLOCKED - GATES FAILED' : 'BLOCKED - EVIDENCE MISSING OR UNVERIFIED';
 
     const certData: CertificationData = {
       projectName,
@@ -1200,32 +1297,18 @@ export class EngineeringCertificationEngine {
     const evidenceManifestJson = this.generateEvidenceManifest(files, certData);
     const executiveSummary = this.generateExecutiveSummary(projectName, certificationId, score, grade, status, executionEvidence);
 
-    // Filter client deliverable files (exclude internal diagnostics)
     const certifiedFiles = files.filter(f => !f.path.startsWith('.diagnostics/'));
-
     const internalDiagnostics: ProjectFile[] = [
       { path: '.diagnostics/ENGINEERING_CERTIFICATION.md', content: certificateMd, language: 'markdown' },
       { path: '.diagnostics/EVIDENCE_MANIFEST.json', content: evidenceManifestJson, language: 'json' }
     ];
-
-    const artifacts: CertificationArtifacts = {
-      projectFiles: certifiedFiles,
-      internalDiagnostics
-    };
-
-    const issues: string[] = [];
-    gateArray.forEach(g => {
-      if (g.status !== 'PASS') {
-        issues.push(`${g.name} [${g.status}]: ${g.details}`);
-      }
-    });
 
     return {
       isCertified,
       status,
       certifiedFiles,
       internalDiagnostics,
-      artifacts,
+      artifacts: { projectFiles: certifiedFiles, internalDiagnostics },
       certificateMd,
       evidenceManifestJson,
       certificationId,
@@ -1233,28 +1316,18 @@ export class EngineeringCertificationEngine {
       grade,
       score,
       executiveSummary,
-      issues
+      issues: gateArray.filter(g => g.status !== 'PASS').map(g => `${g.name} [${g.status}]: ${g.details}`)
     };
   }
 
-  public static certify(
-    files: ProjectFile[],
-    projectName: string = 'SmartContractProject',
-    blockchain: string = 'ethereum',
-    prompt: string = ''
-  ) {
+  public static certify(files: ProjectFile[], projectName: string = 'SmartContractProject', blockchain: string = 'ethereum', prompt: string = '') {
     if (!Array.isArray(files)) throw new Error("EngineeringCertificationEngine.certify: files must be an array");
     const cert = this.certifyProject(files, projectName, prompt, blockchain);
     if (!cert || !cert.certifiedFiles) throw new Error("EngineeringCertificationEngine returned invalid result");
     return cert;
   }
 
-  public static finalizeCertification(
-    files: ProjectFile[],
-    projectName: string = 'SmartContractProject',
-    blockchain: string = 'ethereum',
-    prompt: string = ''
-  ) {
+  public static finalizeCertification(files: ProjectFile[], projectName: string = 'SmartContractProject', blockchain: string = 'ethereum', prompt: string = '') {
     return this.certify(files, projectName, blockchain, prompt);
   }
 }

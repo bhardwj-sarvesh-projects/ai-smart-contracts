@@ -1,5 +1,6 @@
 import { ProjectFile } from '../../../types';
 import { SecurityAuditEngine } from './SecurityAuditEngine';
+import { CompilerEngine } from '../compiler/CompilerEngine';
 
 export interface BenchmarkResult {
   benchmarkName: string;
@@ -355,7 +356,13 @@ pub struct Make<'info> {
     const results: BenchmarkResult[] = [];
 
     benchmarks.forEach(bm => {
-      const certification = SecurityAuditEngine.certifySecurity(bm.files, bm.name, bm.blockchain);
+      const compilation = CompilerEngine.certifyCompilation(bm.files, bm.name, bm.blockchain);
+      const certification = SecurityAuditEngine.certifySecurity(
+        compilation.certifiedFiles,
+        bm.name,
+        bm.blockchain,
+        { success: compilation.result.success, status: compilation.result.status, verificationMode: compilation.result.verificationMode, exitCode: compilation.result.exitCode }
+      );
       const detectedBlockchain = certification.auditResult.blockchain;
       const blockchainIdentifiedCorrectly = detectedBlockchain === bm.blockchain || (bm.blockchain === 'Aptos' && detectedBlockchain.includes('Aptos')) || (bm.blockchain === 'Sui' && detectedBlockchain.includes('Sui'));
 

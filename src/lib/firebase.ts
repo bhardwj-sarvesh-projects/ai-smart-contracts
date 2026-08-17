@@ -1,33 +1,23 @@
 import { initializeApp, getApps } from "firebase/app";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
+import { getAuth, signOut, onAuthStateChanged } from "firebase/auth";
 
-// Firebase Config
+// Firebase configuration is supplied only through Vite environment variables.
 const firebaseConfig = {
-  apiKey: "AIzaSyFakeKeyForPreviewSmartContractStudio",
-  authDomain: "smartcontract-ai-studio.firebaseapp.com",
-  projectId: "smartcontract-ai-studio",
-  storageBucket: "smartcontract-ai-studio.appspot.com",
-  messagingSenderId: "1234567890",
-  appId: "1:1234567890:web:abcdef123456"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY, authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID, storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID, appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 let app;
 let auth: any = null;
-let provider: any = null;
 
+
+const firebaseConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.authDomain && firebaseConfig.projectId && firebaseConfig.appId);
 try {
-  if (getApps().length === 0) {
-    app = initializeApp(firebaseConfig);
-  } else {
-    app = getApps()[0];
-  }
-  auth = getAuth(app);
-  provider = new GoogleAuthProvider();
-} catch (err) {
-  console.warn("[FIREBASE] Client Initialization skipped or errored:", err);
-}
+  if (firebaseConfigured) { app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0]; auth = getAuth(app); }
+} catch (err) { console.error('[FIREBASE] Client initialization failed:', err); auth = null; }
 
-export { auth, provider };
+export { auth };
 
 export interface AppUser {
   uid: string;
@@ -77,35 +67,7 @@ export class AuthService {
     return () => {};
   }
 
-  static async loginWithGoogle(): Promise<AppUser> {
-    if (auth && provider) {
-      try {
-        const result = await signInWithPopup(auth, provider);
-        const u: AppUser = {
-          uid: result.user.uid,
-          email: result.user.email || "",
-          displayName: result.user.displayName || result.user.email?.split("@")[0] || "Developer",
-          photoURL: result.user.photoURL || "",
-        };
-        localStorage.setItem("app_user", JSON.stringify(u));
-        localStorage.removeItem("app_user_offline");
-        return u;
-      } catch (err) {
-        console.warn("[FIREBASE] Popup blocked or failed. Activating robust simulated secure sign-in.", err);
-      }
-    }
-
-    // Simulated auth fallback - extremely critical for sandboxed iframe environments
-    const mockUser: AppUser = {
-      uid: "usr_google_preview_user_2026",
-      email: "developer@smartcontract.ai",
-      displayName: "Principal Developer",
-      photoURL: "https://lh3.googleusercontent.com/a/default-user=s96-c",
-    };
-    localStorage.setItem("app_user", JSON.stringify(mockUser));
-    localStorage.setItem("app_user_offline", "true");
-    return mockUser;
-  }
+  static async loginWithGoogle(): Promise<AppUser> { throw new Error('Google sign-in is disabled. Use email/password authentication.'); }
 
   static async logout(): Promise<void> {
     localStorage.removeItem("app_user");

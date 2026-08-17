@@ -623,7 +623,8 @@ ${filesListStr}
     const securityCertification = SecurityAuditEngine.certifySecurity(
       compilerCertification.certifiedFiles,
       projectName || 'SmartContractProject',
-      undefined
+      undefined,
+      { success: compilerCertification.result.success, status: compilerCertification.result.status, verificationMode: compilerCertification.result.verificationMode, exitCode: compilerCertification.result.exitCode }
     );
     if (!securityCertification || !securityCertification.certifiedFiles) {
       throw new Error("SecurityAuditEngine returned invalid result during workspace finalization");
@@ -633,11 +634,11 @@ ${filesListStr}
     const remainingCriticalOrHigh = securityCertification.auditResult.findings.filter(
       f => f.severity === 'Critical' || f.severity === 'High'
     );
-    if (remainingCriticalOrHigh.length > 0) {
+    if (securityCertification.auditResult.status !== 'CERTIFIED_SECURE' || remainingCriticalOrHigh.length > 0) {
       const findingsList = remainingCriticalOrHigh
         .map(f => `[${f.severity.toUpperCase()}] ${f.id}: ${f.title} inside ${f.affectedFile}`)
         .join('\n');
-      throw new Error(`Security Audit Gate Failed:\n${findingsList}`);
+      throw new Error(`Security Audit Gate Failed (status=${securityCertification.auditResult.status}):\n${findingsList || 'Authoritative security evidence is not verified.'}`);
     }
 
     // Phase 10: Generate the 4 required automated validation reports

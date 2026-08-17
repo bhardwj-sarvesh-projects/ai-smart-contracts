@@ -15,19 +15,13 @@ interface RightAssistantProps {
 }
 
 const PROVIDERS = [
-  { id: 'auto', name: '✨ Auto Select', desc: 'Chooses best model' },
-  { id: 'openai', name: 'OpenAI GPT', desc: 'GPT-5.5 Enterprise' },
-  { id: 'claude', name: 'Anthropic Claude', desc: 'Claude 3.5 Sonnet' },
-  { id: 'deepseek', name: 'DeepSeek', desc: 'DeepSeek-V3 Coder' },
-  { id: 'llama', name: 'Meta Llama', desc: 'Llama 3.1 405B' }
+  { id: 'openai', name: 'OpenAI', desc: 'OpenAI models configured by the server' },
+  { id: 'groq', name: 'Groq', desc: 'Groq models configured by the server' }
 ];
 
 const MODELS: Record<string, string[]> = {
-  auto: ['Intelligent Router'],
-  openai: ['gpt-5.5', 'gpt-4o', 'o1-mini'],
-  claude: ['claude-3-5-sonnet', 'claude-3-opus'],
-  deepseek: ['deepseek-coder-v2', 'deepseek-chat'],
-  llama: ['llama-3-70b-instruct', 'llama-3-405b']
+  openai: ['gpt-4o-mini', 'gpt-4o', 'o3-mini'],
+  groq: ['llama-3.3-70b-versatile', 'llama3-70b-8192']
 };
 
 function RightAssistant({

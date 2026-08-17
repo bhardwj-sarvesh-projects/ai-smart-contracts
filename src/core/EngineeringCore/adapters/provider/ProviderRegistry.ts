@@ -1,51 +1,19 @@
 export interface ProviderAdapter {
-  id: string;
-  name: string;
-  defaultModel: string;
-  supportedModels: string[];
+  id: string; name: string; defaultModel: string; supportedModels: string[];
 }
-
 export class OpenAIAdapter implements ProviderAdapter {
-  id = 'openai';
-  name = 'OpenAI';
-  defaultModel = 'gpt-4o';
-  supportedModels = ['gpt-4o', 'gpt-4o-mini', 'o1-preview', 'o3-mini'];
+  id = 'openai'; name = 'OpenAI'; defaultModel = 'gpt-4o-mini'; supportedModels = ['gpt-4o-mini', 'gpt-4o', 'o3-mini'];
 }
-
-export class GeminiAdapter implements ProviderAdapter {
-  id = 'gemini';
-  name = 'Google Gemini';
-  defaultModel = 'gemini-2.5-flash';
-  supportedModels = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-pro'];
-}
-
 export class GroqAdapter implements ProviderAdapter {
-  id = 'groq';
-  name = 'Groq Cloud';
-  defaultModel = 'llama-3.3-70b-versatile';
-  supportedModels = ['llama-3.3-70b-versatile', 'llama3-70b-8192', 'mixtral-8x7b-32768'];
+  id = 'groq'; name = 'Groq Cloud'; defaultModel = 'llama-3.3-70b-versatile'; supportedModels = ['llama-3.3-70b-versatile', 'llama3-70b-8192', 'mixtral-8x7b-32768'];
 }
-
-export class AnthropicAdapter implements ProviderAdapter {
-  id = 'anthropic';
-  name = 'Anthropic Claude';
-  defaultModel = 'claude-3-5-sonnet';
-  supportedModels = ['claude-3-5-sonnet', 'claude-3-haiku'];
-}
-
 export class ProviderRegistry {
-  private static adapters: Map<string, ProviderAdapter> = new Map();
-
-  static initialize() {
-    if (this.adapters.size > 0) return;
-    this.adapters.set('openai', new OpenAIAdapter());
-    this.adapters.set('groq', new GroqAdapter());
-    this.adapters.set('anthropic', new AnthropicAdapter());
-  }
-
+  private static adapters = new Map<string, ProviderAdapter>();
+  static initialize() { if (this.adapters.size) return; this.adapters.set('openai', new OpenAIAdapter()); this.adapters.set('groq', new GroqAdapter()); }
   static getAdapter(id: string): ProviderAdapter {
-    this.initialize();
-    const normalized = (id || 'openai').toLowerCase().trim();
-    return this.adapters.get(normalized) || this.adapters.get('openai')!;
+    this.initialize(); const key = (id || 'openai').toLowerCase().trim(); const adapter = this.adapters.get(key);
+    if (!adapter) throw new Error(`Unsupported AI provider: ${id}. Active providers are OpenAI and Groq.`);
+    return adapter;
   }
+  static listAdapters(): ProviderAdapter[] { this.initialize(); return Array.from(this.adapters.values()); }
 }

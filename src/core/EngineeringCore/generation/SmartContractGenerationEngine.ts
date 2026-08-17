@@ -587,14 +587,17 @@ ${overallScore >= 90 ? 'Project meets or exceeds all enterprise client delivery 
     const compilerPass = compilation.result.success;
 
     // Gate 4: Security Audit
-    const security = SecurityAuditEngine.certifySecurity(compilation.certifiedFiles, projectName, blockchain);
-    const securityPass = security.auditResult.criticalCount === 0 && security.auditResult.highCount === 0;
+    const security = SecurityAuditEngine.certifySecurity(
+      compilation.certifiedFiles, projectName, blockchain,
+      { success: compilation.result.success, status: compilation.result.status, verificationMode: compilation.result.verificationMode, exitCode: compilation.result.exitCode }
+    );
+    const securityPass = security.auditResult.status === 'CERTIFIED_SECURE';
 
     // Gate 5: Deployment Readiness
     const defaultWallet: WalletConfig = {
       walletType: blockchain === 'Solana' ? 'Phantom' : (blockchain === 'Aptos' ? 'Petra Wallet' : (blockchain === 'Sui' ? 'Sui Wallet' : 'MetaMask')),
-      address: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e',
-      isConnected: true,
+      address: '',
+      isConnected: false,
       blockchain
     };
     const defaultNetwork: NetworkConfig = {

@@ -17,7 +17,8 @@ export type DeploymentState =
   | 'AWAITING_CONFIRMATION'
   | 'VERIFYING'
   | 'COMPLETED'
-  | 'FAILED';
+  | 'FAILED'
+  | 'NOT_VERIFIED';
 
 export interface WalletConfig {
   walletType: 'MetaMask' | 'WalletConnect' | 'Coinbase Wallet' | 'Phantom' | 'Solflare' | 'Petra Wallet' | 'Sui Wallet' | string;
@@ -177,8 +178,11 @@ export class DeploymentEngine {
     }
 
     // 4. Security Audit (0 Critical, 0 High)
-    const security = SecurityAuditEngine.certifySecurity(compilation.certifiedFiles, options.projectName, blockchain);
-    const securityPass = security.auditResult.criticalCount === 0 && security.auditResult.highCount === 0;
+    const security = SecurityAuditEngine.certifySecurity(
+      compilation.certifiedFiles, options.projectName, blockchain,
+      { success: compilation.result.success, status: compilation.result.status, verificationMode: compilation.result.verificationMode, exitCode: compilation.result.exitCode }
+    );
+    const securityPass = security.auditResult.status === 'CERTIFIED_SECURE';
     if (!securityPass) {
       diagnostics.push(`Security Gate check failed: ${security.auditResult.criticalCount} Critical and ${security.auditResult.highCount} High vulnerabilities detected.`);
     }
@@ -463,6 +467,21 @@ This smart contract deployment passed all pre-deployment validation gates (Proje
       this.storeInHistory(options.projectName, forcedFailResult);
       return forcedFailResult;
     }
+
+    // No wallet/RPC adapter is actually broadcasting a signed transaction here.
+    // Never derive a transaction hash/address and claim COMPLETED.
+    const notVerifiedResult: DeploymentResult = {
+      deploymentId, timestamp, state: 'NOT_VERIFIED', projectName: options.projectName, blockchain, framework,
+      network: options.network.networkName, wallet: options.wallet, contractName: 'N/A', contractAddress: 'N/A',
+      transactionHash: 'N/A', blockNumber: undefined, gasUsed: undefined, explorerLink: options.network.explorerBaseUrl || 'N/A',
+      verificationStatus: 'UNVERIFIED', stateHistory, logs,
+      error: 'ON_CHAIN_DEPLOYMENT_NOT_IMPLEMENTED: No real signed transaction was submitted.',
+      recoveryGuidance: 'Use a real wallet/RPC deployment adapter and only mark COMPLETED after receiving an authoritative receipt and on-chain address.', reportMarkdown: ''
+    };
+    updateState('NOT_VERIFIED', notVerifiedResult.error);
+    notVerifiedResult.reportMarkdown = this.generateDeploymentReport(notVerifiedResult);
+    this.storeInHistory(options.projectName, notVerifiedResult);
+    return notVerifiedResult;
 
     if (blockchain === 'Ethereum/EVM') {
       updateState('CONNECTING_WALLET', `Wallet Detection: Detecting EVM-compatible browser extensions (MetaMask / Coinbase / WalletConnect)... Found ${options.wallet.walletType} with active address ${options.wallet.address}.`);

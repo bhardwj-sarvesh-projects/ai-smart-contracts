@@ -267,8 +267,7 @@ export const AuthService = {
    */
   async forgotPassword(email: string): Promise<void> {
     if (!isFirebaseConfigured || !auth) {
-      console.warn('[OFFLINE_MODE] Simulated password reset for:', email);
-      return Promise.resolve();
+      throw new Error('PASSWORD_RESET_UNAVAILABLE: Firebase authentication is not configured.');
     }
     try {
       await sendPasswordResetEmail(auth, email);

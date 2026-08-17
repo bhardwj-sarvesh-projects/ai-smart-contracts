@@ -6,7 +6,8 @@ import { TestingValidationResult } from '../testing/TestingValidationEngine';
 import { SecurityAuditResult } from '../security/SecurityAuditEngine';
 import { DependencyValidationResult } from '../validators/DependencyValidationEngine';
 import { ArchitectureValidationResult } from '../architecture/ArchitectureValidationEngine';
-import { ExportCertificationResult } from '../export/ExportEngine';
+import { ExportCertificationResult, ExportEngine } from '../export/ExportEngine';
+import { sha256 } from '../utils/cryptoFallback';
 
 const mockValidFiles: ProjectFile[] = [
   {
@@ -29,6 +30,28 @@ const mockValidFiles: ProjectFile[] = [
     language: 'markdown',
     content: '# Token README'
   }
+];
+
+const mockFileHashes = {
+  "contracts/Token.sol": sha256(mockValidFiles[0].content),
+  "test/Token.t.sol": sha256(mockValidFiles[1].content),
+  "script/Deploy.s.sol": sha256(mockValidFiles[2].content),
+  "README.md": sha256(mockValidFiles[3].content)
+};
+const mockManifestJson = JSON.stringify({ hashes: mockFileHashes });
+const mockManifestHash = sha256(mockManifestJson);
+const mockChecksumsTxt = [
+  `${mockFileHashes["contracts/Token.sol"]}  contracts/Token.sol`,
+  `${mockFileHashes["test/Token.t.sol"]}  test/Token.t.sol`,
+  `${mockFileHashes["script/Deploy.s.sol"]}  script/Deploy.s.sol`,
+  `${mockFileHashes["README.md"]}  README.md`,
+  `${mockManifestHash}  MANIFEST.json`
+].join('\n');
+
+const mockFullExportedFiles = [
+  ...mockValidFiles,
+  { path: 'MANIFEST.json', content: mockManifestJson },
+  { path: 'CHECKSUMS.txt', content: mockChecksumsTxt }
 ];
 
 const mockPassingEvidence: CertificationOptions = {
@@ -104,16 +127,9 @@ const mockPassingEvidence: CertificationOptions = {
   },
   exportResult: {
     exportCertified: true,
-    exportedFiles: mockValidFiles,
-    manifestJson: JSON.stringify({
-      hashes: {
-        "contracts/Token.sol": "e1b173ccaeda2f98e54377dab43c6bd817d39356cd82c55fdd5af21ed34dbdb8",
-        "test/Token.t.sol": "6ba0adef2a39ffebf09eaa4b698df70a21e8691529a199cac0de08baebfe599b",
-        "script/Deploy.s.sol": "49f31686306a274e757b998a4e7f31f19870abe9c91ea282c23a07fb2ad720f0",
-        "README.md": "f591ea633524378e73e0c0eac7e6671007ce5a6f58c6508e2c7f9edee1bf7242"
-      }
-    }),
-    checksumsTxt: 'e1b173ccaeda2f98e54377dab43c6bd817d39356cd82c55fdd5af21ed34dbdb8  contracts/Token.sol\n6ba0adef2a39ffebf09eaa4b698df70a21e8691529a199cac0de08baebfe599b  test/Token.t.sol\n49f31686306a274e757b998a4e7f31f19870abe9c91ea282c23a07fb2ad720f0  script/Deploy.s.sol\nf591ea633524378e73e0c0eac7e6671007ce5a6f58c6508e2c7f9edee1bf7242  README.md',
+    exportedFiles: mockFullExportedFiles,
+    manifestJson: mockManifestJson,
+    checksumsTxt: mockChecksumsTxt,
     deliverySummaryMd: '',
     versionTxt: 'v1.0.0',
     reportsPresentCount: 0,
@@ -612,8 +628,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -631,12 +647,21 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
     });
 
     it('TEST 9: PASS + complete evidence + all required gates=true -> PASS', () => {
+      const content = 'contract Token {}';
+      const fileHash = sha256(content);
+      const manifestJson = JSON.stringify({ hashes: { "contracts/Token.sol": fileHash } });
+      const manifestHash = sha256(manifestJson);
+      const checksumsTxt = `${fileHash}  contracts/Token.sol\n${manifestHash}  MANIFEST.json`;
       const res = EngineeringCertificationEngine.collectExportResults({
         status: 'PASS',
         exportCertified: true,
-        exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        exportedFiles: [
+          { path: 'contracts/Token.sol', content },
+          { path: 'MANIFEST.json', content: manifestJson },
+          { path: 'CHECKSUMS.txt', content: checksumsTxt }
+        ],
+        manifestJson,
+        checksumsTxt,
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -653,12 +678,18 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
     });
 
     it('TEST 10: FAIL + complete evidence -> FAIL', () => {
+      const manifestJson = JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } });
+      const checksumsTxt = 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol\n45bc34f6bb9cdde8ee794ea8e7eeb3fc3430ee81414e2d3129853ebc837aafe0  MANIFEST.json';
       const res = EngineeringCertificationEngine.collectExportResults({
         status: 'FAIL',
         exportCertified: true,
-        exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        exportedFiles: [
+          { path: 'contracts/Token.sol', content: 'contract Token {}' },
+          { path: 'MANIFEST.json', content: manifestJson },
+          { path: 'CHECKSUMS.txt', content: checksumsTxt }
+        ],
+        manifestJson,
+        checksumsTxt,
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -675,12 +706,18 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
     });
 
     it('TEST 11: NOT_VERIFIED + complete evidence -> NOT_VERIFIED', () => {
+      const manifestJson = JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } });
+      const checksumsTxt = 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol\n45bc34f6bb9cdde8ee794ea8e7eeb3fc3430ee81414e2d3129853ebc837aafe0  MANIFEST.json';
       const res = EngineeringCertificationEngine.collectExportResults({
         status: 'NOT_VERIFIED',
         exportCertified: true,
-        exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        exportedFiles: [
+          { path: 'contracts/Token.sol', content: 'contract Token {}' },
+          { path: 'MANIFEST.json', content: manifestJson },
+          { path: 'CHECKSUMS.txt', content: checksumsTxt }
+        ],
+        manifestJson,
+        checksumsTxt,
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -700,8 +737,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
       const res = EngineeringCertificationEngine.collectExportResults({
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -722,8 +759,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: 'true',
           integrity: true,
@@ -744,8 +781,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: null,
           integrity: true,
@@ -766,8 +803,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: undefined,
           integrity: true,
@@ -788,8 +825,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -811,7 +848,7 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
         manifestJson: '{}',
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -834,11 +871,11 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
         manifestJson: JSON.stringify({
           hashes: {
-            "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a",
+            "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8",
             "contracts/NonExistent.sol": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
           }
         }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -864,10 +901,10 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         ],
         manifestJson: JSON.stringify({
           hashes: {
-            "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a"
+            "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8"
           }
         }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -884,12 +921,18 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
     });
 
     it('TEST 20: checksumsTxt contains an incorrect SHA-256 hash -> FAIL', () => {
+      const manifestJson = JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } });
+      const checksumsTxt = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef  contracts/Token.sol\n45bc34f6bb9cdde8ee794ea8e7eeb3fc3430ee81414e2d3129853ebc837aafe0  MANIFEST.json';
       const res = EngineeringCertificationEngine.collectExportResults({
         status: 'PASS',
         exportCertified: true,
-        exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef  contracts/Token.sol',
+        exportedFiles: [
+          { path: 'contracts/Token.sol', content: 'contract Token {}' },
+          { path: 'MANIFEST.json', content: manifestJson },
+          { path: 'CHECKSUMS.txt', content: checksumsTxt }
+        ],
+        manifestJson,
+        checksumsTxt,
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -906,6 +949,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
     });
 
     it('TEST 21: checksumsTxt is missing a file checksum -> NOT_VERIFIED', () => {
+      const tokenHash = sha256('contract Token {}');
+      const otherHash = sha256('contract Other {}');
       const res = EngineeringCertificationEngine.collectExportResults({
         status: 'PASS',
         exportCertified: true,
@@ -915,11 +960,11 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         ],
         manifestJson: JSON.stringify({
           hashes: {
-            "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a",
-            "contracts/Other.sol": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+            "contracts/Token.sol": tokenHash,
+            "contracts/Other.sol": otherHash
           }
         }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        checksumsTxt: `${tokenHash}  contracts/Token.sol`,
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -940,8 +985,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol\ncf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol\ne46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -973,8 +1018,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -1006,8 +1051,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -1039,8 +1084,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -1072,8 +1117,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -1105,8 +1150,8 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         status: 'PASS',
         exportCertified: true,
         exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8" } }),
+        checksumsTxt: 'e46091d1e1289881f57929fc0aed3855eb38bfc76480516fe5ecd2521e17d4f8  contracts/Token.sol',
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -1134,12 +1179,21 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         testing: { name: 'Testing', status: 'PASS', passed: true, score: 100, details: '' },
         documentation: { name: 'Documentation', status: 'PASS', passed: true, score: 100, details: '' }
       };
+      const content = 'contract Token {}';
+      const fileHash = sha256(content);
+      const manifestJson = JSON.stringify({ hashes: { "contracts/Token.sol": fileHash } });
+      const manifestHash = sha256(manifestJson);
+      const checksumsTxt = `${fileHash}  contracts/Token.sol\n${manifestHash}  MANIFEST.json`;
       const res = EngineeringCertificationEngine.collectExportResults({
         status: 'PASS',
         exportCertified: true,
-        exportedFiles: [{ path: 'contracts/Token.sol', content: 'contract Token {}' }],
-        manifestJson: JSON.stringify({ hashes: { "contracts/Token.sol": "cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a" } }),
-        checksumsTxt: 'cf20d838d6c45ab6b824a3566aa01856466942d568517075520be70aaccd2b8a  contracts/Token.sol',
+        exportedFiles: [
+          { path: 'contracts/Token.sol', content },
+          { path: 'MANIFEST.json', content: manifestJson },
+          { path: 'CHECKSUMS.txt', content: checksumsTxt }
+        ],
+        manifestJson,
+        checksumsTxt,
         validationGatesPassed: {
           workspace: true,
           integrity: true,
@@ -1153,6 +1207,579 @@ describe('EngineeringCertificationEngine - Fix #4 Authoritative Certification', 
         }
       }, authGates);
       expect(res.status).toBe('PASS');
+    });
+  });
+
+  describe('Fix #4 Final - Manifest SHA-256 Authenticity & Integrity Tests', () => {
+    const authGatesPass = {
+      workspace: { name: 'Workspace', status: 'PASS', passed: true, score: 100, details: '' },
+      integrity: { name: 'Integrity', status: 'PASS', passed: true, score: 100, details: '' },
+      dependencies: { name: 'Dependencies', status: 'PASS', passed: true, score: 100, details: '' },
+      compiler: { name: 'Compiler', status: 'PASS', passed: true, score: 100, details: '' },
+      security: { name: 'Security', status: 'PASS', passed: true, score: 100, details: '' },
+      deployment: { name: 'Deployment', status: 'PASS', passed: true, score: 100, details: '' },
+      architecture: { name: 'Architecture', status: 'PASS', passed: true, score: 100, details: '' },
+      testing: { name: 'Testing', status: 'PASS', passed: true, score: 100, details: '' },
+      documentation: { name: 'Documentation', status: 'PASS', passed: true, score: 100, details: '' }
+    };
+
+    it('TEST 1 — VALID MANIFEST HASH passes manifest validation', () => {
+      const content = 'contract Token {}';
+      const fileHash = sha256(content);
+      const manifestJson = JSON.stringify({ hashes: { "contracts/Token.sol": fileHash } });
+      const manifestHash = sha256(manifestJson);
+      const checksumsTxt = `${fileHash}  contracts/Token.sol\n${manifestHash}  MANIFEST.json`;
+      const exportedFiles = [
+        { path: 'contracts/Token.sol', content },
+        { path: 'MANIFEST.json', content: manifestJson },
+        { path: 'CHECKSUMS.txt', content: checksumsTxt }
+      ];
+
+      const res = EngineeringCertificationEngine.collectExportResults({
+        status: 'PASS',
+        exportCertified: true,
+        exportedFiles,
+        manifestJson,
+        checksumsTxt,
+        validationGatesPassed: {
+          workspace: true, integrity: true, dependencies: true, compiler: true,
+          security: true, deployment: true, architecture: true, testing: true, documentation: true
+        }
+      }, authGatesPass);
+
+      expect(res.status).toBe('PASS');
+    });
+
+    it('TEST 2 — WRONG MANIFEST HASH returns FAIL', () => {
+      const content = 'contract Token {}';
+      const realHash = sha256(content);
+      const wrongHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const manifestJson = JSON.stringify({ hashes: { "contracts/Token.sol": wrongHash } });
+      const manifestHash = sha256(manifestJson);
+      const checksumsTxt = `${realHash}  contracts/Token.sol\n${manifestHash}  MANIFEST.json`;
+      const exportedFiles = [
+        { path: 'contracts/Token.sol', content },
+        { path: 'MANIFEST.json', content: manifestJson },
+        { path: 'CHECKSUMS.txt', content: checksumsTxt }
+      ];
+
+      const res = EngineeringCertificationEngine.collectExportResults({
+        status: 'PASS',
+        exportCertified: true,
+        exportedFiles,
+        manifestJson,
+        checksumsTxt,
+        validationGatesPassed: {
+          workspace: true, integrity: true, dependencies: true, compiler: true,
+          security: true, deployment: true, architecture: true, testing: true, documentation: true
+        }
+      }, authGatesPass);
+
+      expect(res.status).toBe('FAIL');
+      expect(res.details).toContain('Manifest hash mismatch');
+    });
+
+    it('TEST 3 — INVALID HASH FORMAT returns NOT_VERIFIED', () => {
+      const content = 'contract Token {}';
+      const realHash = sha256(content);
+      const manifestJson = JSON.stringify({ hashes: { "contracts/Token.sol": "12345" } });
+      const manifestHash = sha256(manifestJson);
+      const checksumsTxt = `${realHash}  contracts/Token.sol\n${manifestHash}  MANIFEST.json`;
+      const exportedFiles = [
+        { path: 'contracts/Token.sol', content },
+        { path: 'MANIFEST.json', content: manifestJson },
+        { path: 'CHECKSUMS.txt', content: checksumsTxt }
+      ];
+
+      const res = EngineeringCertificationEngine.collectExportResults({
+        status: 'PASS',
+        exportCertified: true,
+        exportedFiles,
+        manifestJson,
+        checksumsTxt,
+        validationGatesPassed: {
+          workspace: true, integrity: true, dependencies: true, compiler: true,
+          security: true, deployment: true, architecture: true, testing: true, documentation: true
+        }
+      }, authGatesPass);
+
+      expect(res.status).toBe('NOT_VERIFIED');
+      expect(res.details).toContain('invalid');
+    });
+
+    it('TEST 4 — MISSING MANIFEST HASH returns NOT_VERIFIED', () => {
+      const content = 'contract Token {}';
+      const realHash = sha256(content);
+      const manifestJson = JSON.stringify({ hashes: {} });
+      const manifestHash = sha256(manifestJson);
+      const checksumsTxt = `${realHash}  contracts/Token.sol\n${manifestHash}  MANIFEST.json`;
+      const exportedFiles = [
+        { path: 'contracts/Token.sol', content },
+        { path: 'MANIFEST.json', content: manifestJson },
+        { path: 'CHECKSUMS.txt', content: checksumsTxt }
+      ];
+
+      const res = EngineeringCertificationEngine.collectExportResults({
+        status: 'PASS',
+        exportCertified: true,
+        exportedFiles,
+        manifestJson,
+        checksumsTxt,
+        validationGatesPassed: {
+          workspace: true, integrity: true, dependencies: true, compiler: true,
+          security: true, deployment: true, architecture: true, testing: true, documentation: true
+        }
+      }, authGatesPass);
+
+      expect(res.status).toBe('NOT_VERIFIED');
+      expect(res.details).toContain('Integrity verification mismatch');
+    });
+
+    it('TEST 5 — EXTRA MANIFEST HASH returns NOT_VERIFIED', () => {
+      const content = 'contract Token {}';
+      const realHash = sha256(content);
+      const manifestJson = JSON.stringify({
+        hashes: {
+          "contracts/Token.sol": realHash,
+          "contracts/DoesNotExist.sol": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      });
+      const manifestHash = sha256(manifestJson);
+      const checksumsTxt = `${realHash}  contracts/Token.sol\n${manifestHash}  MANIFEST.json`;
+      const exportedFiles = [
+        { path: 'contracts/Token.sol', content },
+        { path: 'MANIFEST.json', content: manifestJson },
+        { path: 'CHECKSUMS.txt', content: checksumsTxt }
+      ];
+
+      const res = EngineeringCertificationEngine.collectExportResults({
+        status: 'PASS',
+        exportCertified: true,
+        exportedFiles,
+        manifestJson,
+        checksumsTxt,
+        validationGatesPassed: {
+          workspace: true, integrity: true, dependencies: true, compiler: true,
+          security: true, deployment: true, architecture: true, testing: true, documentation: true
+        }
+      }, authGatesPass);
+
+      expect(res.status).toBe('NOT_VERIFIED');
+    });
+
+    it('TEST 6 — MANIFEST SELF HASH returns NOT_VERIFIED or FAIL', () => {
+      const content = 'contract Token {}';
+      const realHash = sha256(content);
+      const manifestJson = JSON.stringify({
+        hashes: {
+          "contracts/Token.sol": realHash,
+          "MANIFEST.json": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      });
+      const manifestHash = sha256(manifestJson);
+      const checksumsTxt = `${realHash}  contracts/Token.sol\n${manifestHash}  MANIFEST.json`;
+      const exportedFiles = [
+        { path: 'contracts/Token.sol', content },
+        { path: 'MANIFEST.json', content: manifestJson },
+        { path: 'CHECKSUMS.txt', content: checksumsTxt }
+      ];
+
+      const res = EngineeringCertificationEngine.collectExportResults({
+        status: 'PASS',
+        exportCertified: true,
+        exportedFiles,
+        manifestJson,
+        checksumsTxt,
+        validationGatesPassed: {
+          workspace: true, integrity: true, dependencies: true, compiler: true,
+          security: true, deployment: true, architecture: true, testing: true, documentation: true
+        }
+      }, authGatesPass);
+
+      expect(['NOT_VERIFIED', 'FAIL']).toContain(res.status);
+    });
+
+    it('TEST 7 — CHECKSUMS SELF HASH returns NOT_VERIFIED or FAIL', () => {
+      const content = 'contract Token {}';
+      const realHash = sha256(content);
+      const manifestJson = JSON.stringify({ hashes: { "contracts/Token.sol": realHash } });
+      const checksumsTxt = `${realHash}  contracts/Token.sol\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  CHECKSUMS.txt`;
+      const exportedFiles = [
+        { path: 'contracts/Token.sol', content },
+        { path: 'MANIFEST.json', content: manifestJson },
+        { path: 'CHECKSUMS.txt', content: checksumsTxt }
+      ];
+
+      const res = EngineeringCertificationEngine.collectExportResults({
+        status: 'PASS',
+        exportCertified: true,
+        exportedFiles,
+        manifestJson,
+        checksumsTxt,
+        validationGatesPassed: {
+          workspace: true, integrity: true, dependencies: true, compiler: true,
+          security: true, deployment: true, architecture: true, testing: true, documentation: true
+        }
+      }, authGatesPass);
+
+      expect(['NOT_VERIFIED', 'FAIL']).toContain(res.status);
+    });
+
+    it('TEST 8 — MANIFEST HASH + CHECKSUM HASH BOTH VALID passes', () => {
+      const content = 'contract Token {}';
+      const realHash = sha256(content);
+      const manifestJson = JSON.stringify({ hashes: { "contracts/Token.sol": realHash } });
+      const manifestHash = sha256(manifestJson);
+      const checksumsTxt = `${realHash}  contracts/Token.sol\n${manifestHash}  MANIFEST.json`;
+      const exportedFiles = [
+        { path: 'contracts/Token.sol', content },
+        { path: 'MANIFEST.json', content: manifestJson },
+        { path: 'CHECKSUMS.txt', content: checksumsTxt }
+      ];
+
+      const res = EngineeringCertificationEngine.collectExportResults({
+        status: 'PASS',
+        exportCertified: true,
+        exportedFiles,
+        manifestJson,
+        checksumsTxt,
+        validationGatesPassed: {
+          workspace: true, integrity: true, dependencies: true, compiler: true,
+          security: true, deployment: true, architecture: true, testing: true, documentation: true
+        }
+      }, authGatesPass);
+
+      expect(res.status).toBe('PASS');
+    });
+
+    it('TEST 9 — END-TO-END TEST: ExportEngine.certifyExport -> EngineeringCertificationEngine.certifyProject', () => {
+      const files: ProjectFile[] = [
+        { path: 'contracts/Token.sol', language: 'solidity', content: '// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\ncontract Token {}' },
+        { path: 'README.md', language: 'markdown', content: '# Token' },
+        { path: 'ARCHITECTURE.md', language: 'markdown', content: '# Architecture' },
+        { path: 'SECURITY.md', language: 'markdown', content: '# Security' },
+        { path: 'DEPLOYMENT.md', language: 'markdown', content: '# Deployment' },
+        { path: 'API_REFERENCE.md', language: 'markdown', content: '# API Reference' },
+        { path: 'CLIENT_HANDOVER.md', language: 'markdown', content: '# Handover' },
+        { path: 'DEVELOPER_GUIDE.md', language: 'markdown', content: '# Dev Guide' },
+        { path: 'TESTING_GUIDE.md', language: 'markdown', content: '# Testing Guide' },
+        { path: 'CHANGELOG.md', language: 'markdown', content: '# Changelog' },
+        { path: 'LICENSE', language: 'text', content: 'MIT' },
+        { path: 'KNOWLEDGE_INDEX.md', language: 'markdown', content: '# Knowledge Index' },
+        { path: 'script/Deploy.s.sol', language: 'solidity', content: 'contract Deploy {}' }
+      ];
+
+      const exportResult = ExportEngine.certifyExport(files, 'TokenProject', 'build token', 'ethereum', 'Foundry', {
+        compilationResult: { status: 'PASS', verificationMode: 'REAL_EXECUTION', exitCode: 0 },
+        testingResult: { status: 'PASS', verificationMode: 'REAL_EXECUTION', exitStatus: 0 },
+        securityAuditResult: { criticalCount: 0, highCount: 0, overallStatus: 'PASS' },
+        dependencyResult: { overallStatus: 'PASS' },
+        architectureResult: { architecturePassed: true, requirements: {} },
+        documentationResult: { documentationPassed: true, reportMarkdown: 'doc' },
+        deploymentResult: { deploymentId: 'DEP-1', state: 'COMPLETED', status: 'PASS' }
+      });
+
+      expect(exportResult.status).toBe('PASS');
+      expect(exportResult.exportCertified).toBe(true);
+
+      const options: CertificationOptions = {
+        compilationResult: {
+          status: 'PASS', verificationMode: 'REAL_EXECUTION', exitCode: 0,
+          language: 'Solidity', compilerVersion: '0.8.20', durationMs: 10, stdout: '', stderr: '',
+          result: { success: true, errors: [], warnings: [], contracts: [] }
+        },
+        testingResult: {
+          status: 'PASS', testingPassed: true, verificationMode: 'REAL_EXECUTION', exitStatus: 0,
+          metrics: { testFilesDiscovered: 1, totalTestsDiscovered: 1, testsExecuted: '1', testsPassed: '1', testsFailed: '0' },
+          stdout: '', stderr: '', evidence: { testRunner: 'forge', durationMs: 10, command: 'forge test' }, issues: []
+        },
+        securityAuditResult: {
+          isAudited: true, overallStatus: 'PASS', criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0, findings: [], analysisTimestamp: new Date().toISOString()
+        },
+        dependencyResult: {
+          overallStatus: 'PASS', projectName: 'TokenProject', checks: [], warnings: [], errors: []
+        },
+        architectureResult: {
+          isValid: true, status: 'PASS', architecturePassed: true, coverageScore: 100, mappedRequirementsCount: 1, missingRequirementsCount: 0, details: '', reportMarkdown: 'report', requirements: {}, comparison: {}, scoreBreakdown: {}
+        },
+        documentationResult: {
+          passed: true, status: 'PASS', documentationPassed: true, documentationCertified: true, reportMarkdown: 'doc', certifiedFiles: files, presentDocs: []
+        },
+        deploymentResult: {
+          passed: true, canDeploy: true, status: 'PASS', deploymentId: 'DEP-1', state: 'COMPLETED', reportMarkdown: 'dep', logs: []
+        },
+        exportResult
+      };
+
+      const finalCert = EngineeringCertificationEngine.certifyProject(files, 'TokenProject', 'prompt', 'ethereum', options);
+
+      expect(finalCert.status).toBe('CERTIFIED');
+      expect(finalCert.isCertified).toBe(true);
+      expect(['A', 'A+']).toContain(finalCert.grade);
+    });
+
+    it('TEST 10 — TAMPER TEST: modifying source file content keeping old manifest hash causes FAIL', () => {
+      const files: ProjectFile[] = [
+        { path: 'contracts/Token.sol', language: 'solidity', content: '// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\ncontract Token {}' },
+        { path: 'README.md', language: 'markdown', content: '# Token' },
+        { path: 'ARCHITECTURE.md', language: 'markdown', content: '# Architecture' },
+        { path: 'SECURITY.md', language: 'markdown', content: '# Security' },
+        { path: 'DEPLOYMENT.md', language: 'markdown', content: '# Deployment' },
+        { path: 'API_REFERENCE.md', language: 'markdown', content: '# API Reference' },
+        { path: 'CLIENT_HANDOVER.md', language: 'markdown', content: '# Handover' },
+        { path: 'DEVELOPER_GUIDE.md', language: 'markdown', content: '# Dev Guide' },
+        { path: 'TESTING_GUIDE.md', language: 'markdown', content: '# Testing Guide' },
+        { path: 'CHANGELOG.md', language: 'markdown', content: '# Changelog' },
+        { path: 'LICENSE', language: 'text', content: 'MIT' },
+        { path: 'KNOWLEDGE_INDEX.md', language: 'markdown', content: '# Knowledge Index' },
+        { path: 'script/Deploy.s.sol', language: 'solidity', content: 'contract Deploy {}' }
+      ];
+
+      const exportResult = ExportEngine.certifyExport(files, 'TokenProject', 'prompt', 'ethereum', 'Foundry', {
+        compilationResult: { status: 'PASS', verificationMode: 'REAL_EXECUTION', exitCode: 0 },
+        testingResult: { status: 'PASS', verificationMode: 'REAL_EXECUTION', exitStatus: 0 },
+        securityAuditResult: { criticalCount: 0, highCount: 0, overallStatus: 'PASS' },
+        dependencyResult: { overallStatus: 'PASS' },
+        architectureResult: { architecturePassed: true, requirements: {} },
+        documentationResult: { documentationPassed: true, reportMarkdown: 'doc' },
+        deploymentResult: { deploymentId: 'DEP-1', state: 'COMPLETED', status: 'PASS' }
+      });
+
+      // Tamper: modify content of contracts/Token.sol in exportedFiles, leaving manifestJson unchanged
+      const tamperedFiles = exportResult.exportedFiles.map(f => {
+        if (f.path === 'contracts/Token.sol') {
+          return { ...f, content: '// TAMPERED CONTRACT CONTENT' };
+        }
+        return f;
+      });
+
+      const tamperedExportResult = {
+        ...exportResult,
+        exportedFiles: tamperedFiles
+      };
+
+      const options: CertificationOptions = {
+        compilationResult: {
+          status: 'PASS', verificationMode: 'REAL_EXECUTION', exitCode: 0,
+          language: 'Solidity', compilerVersion: '0.8.20', durationMs: 10, stdout: '', stderr: '',
+          result: { success: true, errors: [], warnings: [], contracts: [] }
+        },
+        testingResult: {
+          status: 'PASS', testingPassed: true, verificationMode: 'REAL_EXECUTION', exitStatus: 0,
+          metrics: { testFilesDiscovered: 1, totalTestsDiscovered: 1, testsExecuted: '1', testsPassed: '1', testsFailed: '0' },
+          stdout: '', stderr: '', evidence: { testRunner: 'forge', durationMs: 10, command: 'forge test' }, issues: []
+        },
+        securityAuditResult: {
+          isAudited: true, overallStatus: 'PASS', criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0, findings: [], analysisTimestamp: new Date().toISOString()
+        },
+        dependencyResult: {
+          overallStatus: 'PASS', projectName: 'TokenProject', checks: [], warnings: [], errors: []
+        },
+        architectureResult: {
+          isValid: true, status: 'PASS', architecturePassed: true, coverageScore: 100, mappedRequirementsCount: 1, missingRequirementsCount: 0, details: '', reportMarkdown: 'report', requirements: {}, comparison: {}, scoreBreakdown: {}
+        },
+        documentationResult: {
+          passed: true, status: 'PASS', documentationPassed: true, documentationCertified: true, reportMarkdown: 'doc', certifiedFiles: files, presentDocs: []
+        },
+        deploymentResult: {
+          passed: true, canDeploy: true, status: 'PASS', deploymentId: 'DEP-1', state: 'COMPLETED', reportMarkdown: 'dep', logs: []
+        },
+        exportResult: tamperedExportResult
+      };
+
+      const finalCert = EngineeringCertificationEngine.certifyProject(files, 'TokenProject', 'prompt', 'ethereum', options);
+
+      expect(finalCert.isCertified).toBe(false);
+      expect(finalCert.status).toBe('FAILED');
+    });
+  });
+
+  describe('Fix #4 Mandatory Consistency Lock Tests 1-12', () => {
+    const validProjectFiles: ProjectFile[] = [
+      { path: 'contracts/Token.sol', language: 'solidity', content: '// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\ncontract Token {}' },
+      { path: 'README.md', language: 'markdown', content: '# Token' },
+      { path: 'ARCHITECTURE.md', language: 'markdown', content: '# Architecture' },
+      { path: 'SECURITY.md', language: 'markdown', content: '# Security' },
+      { path: 'DEPLOYMENT.md', language: 'markdown', content: '# Deployment' },
+      { path: 'API_REFERENCE.md', language: 'markdown', content: '# API Reference' },
+      { path: 'CLIENT_HANDOVER.md', language: 'markdown', content: '# Handover' },
+      { path: 'DEVELOPER_GUIDE.md', language: 'markdown', content: '# Dev Guide' },
+      { path: 'TESTING_GUIDE.md', language: 'markdown', content: '# Testing Guide' },
+      { path: 'CHANGELOG.md', language: 'markdown', content: '# Changelog' },
+      { path: 'LICENSE', language: 'text', content: 'MIT' },
+      { path: 'KNOWLEDGE_INDEX.md', language: 'markdown', content: '# Knowledge Index' }
+    ];
+
+    function createValidRealExport() {
+      return ExportEngine.certifyExport(validProjectFiles, 'TokenProject', 'prompt', 'ethereum', 'Foundry', {
+        compilationResult: { status: 'PASS', verificationMode: 'REAL_EXECUTION', exitCode: 0 },
+        testingResult: { status: 'PASS', verificationMode: 'REAL_EXECUTION', exitStatus: 0 },
+        securityAuditResult: { criticalCount: 0, highCount: 0, overallStatus: 'PASS' },
+        dependencyResult: { overallStatus: 'PASS' },
+        architectureResult: { architecturePassed: true, requirements: {} },
+        documentationResult: { documentationPassed: true, reportMarkdown: 'doc' },
+        deploymentResult: { deploymentId: 'DEP-1', state: 'COMPLETED', status: 'PASS' }
+      });
+    }
+
+    const authGatesPass = {
+      workspace: { name: 'Workspace', status: 'PASS', passed: true, score: 100, details: '' },
+      integrity: { name: 'Integrity', status: 'PASS', passed: true, score: 100, details: '' },
+      dependencies: { name: 'Dependencies', status: 'PASS', passed: true, score: 100, details: '' },
+      compiler: { name: 'Compiler', status: 'PASS', passed: true, score: 100, details: '' },
+      security: { name: 'Security', status: 'PASS', passed: true, score: 100, details: '' },
+      deployment: { name: 'Deployment', status: 'PASS', passed: true, score: 100, details: '' },
+      architecture: { name: 'Architecture', status: 'PASS', passed: true, score: 100, details: '' },
+      testing: { name: 'Testing', status: 'PASS', passed: true, score: 100, details: '' },
+      documentation: { name: 'Documentation', status: 'PASS', passed: true, score: 100, details: '' }
+    };
+
+    it('MANDATORY TEST 1 — ACTUAL MANIFEST MATCH', () => {
+      const exportResult = createValidRealExport();
+      const actualManifest = exportResult.exportedFiles.find(f => f.path === 'MANIFEST.json');
+      expect(actualManifest).toBeDefined();
+      expect(exportResult.manifestJson).toBe(actualManifest?.content);
+      const res = EngineeringCertificationEngine.collectExportResults(exportResult, authGatesPass);
+      expect(res.status).toBe('PASS');
+    });
+
+    it('MANDATORY TEST 2 — MANIFEST REPRESENTATION TAMPER', () => {
+      const exportResult = createValidRealExport();
+      const tamperedExport = { ...exportResult, manifestJson: '{"hashes": {}}' };
+      const res = EngineeringCertificationEngine.collectExportResults(tamperedExport, authGatesPass);
+      expect(res.status).toBe('FAIL');
+      expect(res.details).toContain('MANIFEST.json file content in exportedFiles does not match exportResult.manifestJson');
+    });
+
+    it('MANDATORY TEST 3 — ACTUAL CHECKSUM FILE MATCH', () => {
+      const exportResult = createValidRealExport();
+      const actualChecksums = exportResult.exportedFiles.find(f => f.path === 'CHECKSUMS.txt');
+      expect(actualChecksums).toBeDefined();
+      expect(exportResult.checksumsTxt).toBe(actualChecksums?.content);
+      const res = EngineeringCertificationEngine.collectExportResults(authGatesPass ? exportResult : exportResult, authGatesPass);
+      expect(res.status).toBe('PASS');
+    });
+
+    it('MANDATORY TEST 4 — CHECKSUM REPRESENTATION TAMPER', () => {
+      const exportResult = createValidRealExport();
+      const tamperedExport = { ...exportResult, checksumsTxt: 'tampered checksum content' };
+      const res = EngineeringCertificationEngine.collectExportResults(tamperedExport, authGatesPass);
+      expect(res.status).toBe('FAIL');
+      expect(res.details).toContain('CHECKSUMS.txt file content in exportedFiles does not match exportResult.checksumsTxt');
+    });
+
+    it('MANDATORY TEST 5 — MISSING MANIFEST FILE', () => {
+      const exportResult = createValidRealExport();
+      const tamperedFiles = exportResult.exportedFiles.filter(f => f.path !== 'MANIFEST.json');
+      const tamperedExport = { ...exportResult, exportedFiles: tamperedFiles };
+      const res = EngineeringCertificationEngine.collectExportResults(tamperedExport, authGatesPass);
+      expect(res.status).toBe('NOT_VERIFIED');
+      expect(res.details).toContain('Missing MANIFEST.json');
+    });
+
+    it('MANDATORY TEST 6 — MISSING CHECKSUM FILE', () => {
+      const exportResult = createValidRealExport();
+      const tamperedFiles = exportResult.exportedFiles.filter(f => f.path !== 'CHECKSUMS.txt');
+      const tamperedExport = { ...exportResult, exportedFiles: tamperedFiles };
+      const res = EngineeringCertificationEngine.collectExportResults(tamperedExport, authGatesPass);
+      expect(res.status).toBe('NOT_VERIFIED');
+      expect(res.details).toContain('Missing CHECKSUMS.txt');
+    });
+
+    it('MANDATORY TEST 7 — DUPLICATE MANIFEST', () => {
+      const exportResult = createValidRealExport();
+      const manifestFile = exportResult.exportedFiles.find(f => f.path === 'MANIFEST.json')!;
+      const tamperedFiles = [...exportResult.exportedFiles, { path: 'MANIFEST.json', content: manifestFile.content }];
+      const tamperedExport = { ...exportResult, exportedFiles: tamperedFiles };
+      const res = EngineeringCertificationEngine.collectExportResults(tamperedExport, authGatesPass);
+      expect(res.status).toBe('NOT_VERIFIED');
+      expect(res.details).toContain('Duplicate MANIFEST.json');
+    });
+
+    it('MANDATORY TEST 8 — DUPLICATE CHECKSUMS', () => {
+      const exportResult = createValidRealExport();
+      const checksumFile = exportResult.exportedFiles.find(f => f.path === 'CHECKSUMS.txt')!;
+      const tamperedFiles = [...exportResult.exportedFiles, { path: 'CHECKSUMS.txt', content: checksumFile.content }];
+      const tamperedExport = { ...exportResult, exportedFiles: tamperedFiles };
+      const res = EngineeringCertificationEngine.collectExportResults(tamperedExport, authGatesPass);
+      expect(res.status).toBe('NOT_VERIFIED');
+      expect(res.details).toContain('Duplicate CHECKSUMS.txt');
+    });
+
+    it('MANDATORY TEST 9 — TAMPERED CONTRACT', () => {
+      const exportResult = createValidRealExport();
+      const tamperedFiles = exportResult.exportedFiles.map(f => {
+        if (f.path === 'contracts/Token.sol') {
+          return { ...f, content: '// TAMPERED CONTRACT' };
+        }
+        return f;
+      });
+      const tamperedExport = { ...exportResult, exportedFiles: tamperedFiles };
+      const res = EngineeringCertificationEngine.collectExportResults(tamperedExport, authGatesPass);
+      expect(res.status).toBe('FAIL');
+    });
+
+    it('MANDATORY TEST 10 — TAMPERED MANIFEST', () => {
+      const exportResult = createValidRealExport();
+      const tamperedFiles = exportResult.exportedFiles.map(f => {
+        if (f.path === 'MANIFEST.json') {
+          return { ...f, content: '{"hashes":{}}' };
+        }
+        return f;
+      });
+      const tamperedExport = { ...exportResult, exportedFiles: tamperedFiles };
+      const res = EngineeringCertificationEngine.collectExportResults(tamperedExport, authGatesPass);
+      expect(res.status).toBe('FAIL');
+    });
+
+    it('MANDATORY TEST 11 — TAMPERED CHECKSUM FILE', () => {
+      const exportResult = createValidRealExport();
+      const tamperedFiles = exportResult.exportedFiles.map(f => {
+        if (f.path === 'CHECKSUMS.txt') {
+          return { ...f, content: 'tampered content' };
+        }
+        return f;
+      });
+      const tamperedExport = { ...exportResult, exportedFiles: tamperedFiles };
+      const res = EngineeringCertificationEngine.collectExportResults(tamperedExport, authGatesPass);
+      expect(res.status).toBe('FAIL');
+    });
+
+    it('MANDATORY TEST 12 — VALID COMPLETE PACKAGE (CRITICAL END-TO-END TEST)', () => {
+      const exportResult = createValidRealExport();
+      const options: CertificationOptions = {
+        compilationResult: {
+          status: 'PASS', verificationMode: 'REAL_EXECUTION', exitCode: 0,
+          language: 'Solidity', compilerVersion: '0.8.20', durationMs: 10, stdout: '', stderr: '',
+          result: { success: true, errors: [], warnings: [], contracts: [] }
+        },
+        testingResult: {
+          status: 'PASS', testingPassed: true, verificationMode: 'REAL_EXECUTION', exitStatus: 0,
+          metrics: { testFilesDiscovered: 1, totalTestsDiscovered: 1, testsExecuted: '1', testsPassed: '1', testsFailed: '0' },
+          stdout: '', stderr: '', evidence: { testRunner: 'forge', durationMs: 10, command: 'forge test' }, issues: []
+        },
+        securityAuditResult: {
+          isAudited: true, overallStatus: 'PASS', criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0, findings: [], analysisTimestamp: new Date().toISOString()
+        },
+        dependencyResult: {
+          overallStatus: 'PASS', projectName: 'TokenProject', checks: [], warnings: [], errors: []
+        },
+        architectureResult: {
+          isValid: true, status: 'PASS', architecturePassed: true, coverageScore: 100, mappedRequirementsCount: 1, missingRequirementsCount: 0, details: '', reportMarkdown: 'report', requirements: {}, comparison: {}, scoreBreakdown: {}
+        },
+        documentationResult: {
+          passed: true, status: 'PASS', documentationPassed: true, documentationCertified: true, reportMarkdown: 'doc', certifiedFiles: validProjectFiles, presentDocs: []
+        },
+        deploymentResult: {
+          passed: true, canDeploy: true, status: 'PASS', deploymentId: 'DEP-1', state: 'COMPLETED', reportMarkdown: 'dep', logs: []
+        },
+        exportResult
+      };
+
+      const finalCert = EngineeringCertificationEngine.certifyProject(validProjectFiles, 'TokenProject', 'prompt', 'ethereum', options);
+
+      expect(finalCert.status).toBe('CERTIFIED');
+      expect(finalCert.isCertified).toBe(true);
     });
   });
 

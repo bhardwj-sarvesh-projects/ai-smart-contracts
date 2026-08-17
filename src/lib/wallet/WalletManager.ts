@@ -43,80 +43,18 @@ export class WalletManager {
    * Detects available installed browser extension wallets
    */
   static detectWallets(): WalletProviderInfo[] {
-    const isBrowser = typeof window !== 'undefined';
-    const hasEth = isBrowser && Boolean(window.ethereum);
-
+    const b = typeof window !== 'undefined';
     return [
-      {
-        id: 'metamask',
-        name: 'MetaMask',
-        icon: '🦊',
-        ecosystem: 'ethereum',
-        isInstalled: isBrowser && (Boolean(window.ethereum?.isMetaMask) || hasEth || true)
-      },
-      {
-        id: 'rabby',
-        name: 'Rabby Wallet',
-        icon: '🐰',
-        ecosystem: 'ethereum',
-        isInstalled: isBrowser && (Boolean(window.rabby || window.ethereum?.isRabby) || hasEth || true)
-      },
-      {
-        id: 'coinbase',
-        name: 'Coinbase Wallet',
-        icon: '🔵',
-        ecosystem: 'ethereum',
-        isInstalled: isBrowser && (Boolean(window.coinbaseWalletExtension || window.ethereum?.isCoinbaseWallet) || hasEth || true)
-      },
-      {
-        id: 'phantom',
-        name: 'Phantom',
-        icon: '👻',
-        ecosystem: 'solana',
-        isInstalled: isBrowser && (Boolean(window.solana?.isPhantom) || Boolean(window.solana) || true)
-      },
-      {
-        id: 'solflare',
-        name: 'Solflare',
-        icon: '🔆',
-        ecosystem: 'solana',
-        isInstalled: isBrowser && (Boolean(window.solflare) || true)
-      },
-      {
-        id: 'backpack',
-        name: 'Backpack',
-        icon: '🎒',
-        ecosystem: 'solana',
-        isInstalled: isBrowser && (Boolean(window.backpack) || true)
-      },
-      {
-        id: 'suiWallet',
-        name: 'Sui Wallet',
-        icon: '💧',
-        ecosystem: 'sui',
-        isInstalled: isBrowser && (Boolean(window.suiWallet) || true)
-      },
-      {
-        id: 'suiet',
-        name: 'Suiet Wallet',
-        icon: '💎',
-        ecosystem: 'sui',
-        isInstalled: isBrowser && (Boolean(window.suiet) || true)
-      },
-      {
-        id: 'petra',
-        name: 'Petra Aptos',
-        icon: '🦖',
-        ecosystem: 'aptos',
-        isInstalled: isBrowser && (Boolean(window.aptos || window.petra) || true)
-      },
-      {
-        id: 'martian',
-        name: 'Martian Wallet',
-        icon: '👽',
-        ecosystem: 'aptos',
-        isInstalled: isBrowser && (Boolean(window.martian) || true)
-      }
+      { id:'metamask', name:'MetaMask', icon:'🦊', ecosystem:'ethereum', isInstalled:b && Boolean(window.ethereum?.isMetaMask) },
+      { id:'rabby', name:'Rabby Wallet', icon:'🐰', ecosystem:'ethereum', isInstalled:b && Boolean(window.rabby || window.ethereum?.isRabby) },
+      { id:'coinbase', name:'Coinbase Wallet', icon:'🔵', ecosystem:'ethereum', isInstalled:b && Boolean(window.coinbaseWalletExtension || window.ethereum?.isCoinbaseWallet) },
+      { id:'phantom', name:'Phantom', icon:'👻', ecosystem:'solana', isInstalled:b && Boolean(window.solana?.isPhantom) },
+      { id:'solflare', name:'Solflare', icon:'🔆', ecosystem:'solana', isInstalled:b && Boolean(window.solflare) },
+      { id:'backpack', name:'Backpack', icon:'🎒', ecosystem:'solana', isInstalled:b && Boolean(window.backpack) },
+      { id:'suiWallet', name:'Sui Wallet', icon:'💧', ecosystem:'sui', isInstalled:b && Boolean(window.suiWallet) },
+      { id:'suiet', name:'Suiet', icon:'💎', ecosystem:'sui', isInstalled:b && Boolean(window.suiet) },
+      { id:'petra', name:'Petra Aptos', icon:'🦖', ecosystem:'aptos', isInstalled:b && Boolean(window.aptos || window.petra) },
+      { id:'martian', name:'Martian Wallet', icon:'👽', ecosystem:'aptos', isInstalled:b && Boolean(window.martian) }
     ];
   }
 
@@ -126,13 +64,8 @@ export class WalletManager {
   static async connect(walletId: string, networkId: string): Promise<WalletAccountState> {
     const targetNetwork = NETWORKS.find(n => n.id === networkId) || NETWORKS[1];
     const available = this.detectWallets();
-    const targetInfo = available.find(w => w.id === walletId) || {
-      id: walletId,
-      name: walletId === 'metamask' ? 'MetaMask' : walletId,
-      icon: '🦊',
-      ecosystem: (walletId.includes('phantom') || walletId.includes('solflare')) ? 'solana' : 'ethereum',
-      isInstalled: true
-    };
+    const targetInfo = available.find(w => w.id === walletId);
+    if (!targetInfo || !targetInfo.isInstalled) throw new Error(`Wallet '${walletId}' is not installed or available.`);
 
     let address = '';
 
@@ -216,7 +149,7 @@ export class WalletManager {
     }
 
     // Read real balance from RPC or default gracefully
-    let balance = '12.500';
+    let balance = 'UNKNOWN';
     let symbol = targetNetwork.nativeCurrency?.symbol || 'ETH';
     try {
       const realBal = await RpcManager.getRealBalance(address, targetNetwork.id);
@@ -300,10 +233,10 @@ export class WalletManager {
         if (res && res.signature) return res.signature;
       }
     } catch (err) {
-      console.warn('[WalletManager] Extension message signing exception, using fallback signature:', err);
+      throw new Error(`Wallet message signing failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    return '0x' + Array.from({ length: 130 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+    throw new Error(`Wallet '${saved.walletName}' does not expose a supported real signing method.`);
   }
 
   /**
@@ -329,9 +262,9 @@ export class WalletManager {
         if (txHash) return txHash;
       }
     } catch (err) {
-      console.warn('[WalletManager] Extension transaction broadcast exception, using RPC transaction fallback:', err);
+      throw new Error(`Wallet transaction failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    return '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+    throw new Error(`Wallet '${saved.walletName}' does not expose a supported real transaction method.`);
   }
 }

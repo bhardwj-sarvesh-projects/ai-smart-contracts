@@ -23,14 +23,6 @@ export const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     supportsToolCalling: true,
     recommendedOutputTokens: 4096,
   },
-  claude: {
-    contextWindow: 200000,
-    maxOutputTokens: 8192,
-    supportsStreaming: true,
-    supportsJSON: true,
-    supportsToolCalling: true,
-    recommendedOutputTokens: 4096,
-  },
   groq: {
     contextWindow: 32768,
     maxOutputTokens: 4096,
@@ -39,33 +31,14 @@ export const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
     supportsToolCalling: true,
     recommendedOutputTokens: 2048,
   },
-  gemini: {
-    contextWindow: 2000000,
-    maxOutputTokens: 8192,
-    supportsStreaming: true,
-    supportsJSON: true,
-    supportsToolCalling: true,
-    recommendedOutputTokens: 8192,
-  },
-  bedrock: {
-    contextWindow: 200000,
-    maxOutputTokens: 4096,
-    supportsStreaming: true,
-    supportsJSON: true,
-    supportsToolCalling: true,
-    recommendedOutputTokens: 4096,
-  }
 };
 
 export function detectProvider(modelOrName?: string): string {
-  if (!modelOrName) return "gemini";
+  if (!modelOrName) return "openai";
   const m = modelOrName.toLowerCase();
-  if (m.includes("gemini")) return "gemini";
   if (m.includes("gpt") || m.includes("openai")) return "openai";
-  if (m.includes("claude") || m.includes("anthropic")) return "claude";
   if (m.includes("groq")) return "groq";
-  if (m.includes("bedrock")) return "bedrock";
-  return "gemini"; // default fallback
+  return "openai";
 }
 
 export function calculateDynamicBudget(
@@ -74,7 +47,7 @@ export function calculateDynamicBudget(
   userLimit?: number,
   targetPath?: string
 ): { safeOutputTokens: number; promptTokens: number; remainingContext: number } {
-  const provider = PROVIDER_CAPABILITIES[providerKey] || PROVIDER_CAPABILITIES.gemini;
+  const provider = PROVIDER_CAPABILITIES[providerKey] || PROVIDER_CAPABILITIES.openai;
   
   // Estimate prompt tokens: 4 characters per token
   const promptTokens = Math.ceil(promptLength / 4);
@@ -233,7 +206,7 @@ export class LLMRuntimeEngine {
     projectProfile?: any
   ): Promise<string> {
     const providerKey = detectProvider(modelOrName);
-    const provider = PROVIDER_CAPABILITIES[providerKey] || PROVIDER_CAPABILITIES.gemini;
+    const provider = PROVIDER_CAPABILITIES[providerKey] || PROVIDER_CAPABILITIES.openai;
 
     let currentGeneratedFiles = [...generatedFiles];
     let attempts = 0;
