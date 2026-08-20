@@ -529,11 +529,16 @@ export class CompilerEngine {
         binary = resolved.binary;
         args = ['compile'];
         isAvailable = this.isBinaryAvailable(binary, ['--version']);
-        if (isAvailable && spawnSyncFn) {
-          const vRes = spawnSyncFn(binary, ['--version'], { encoding: 'utf8', cwd: workspacePath });
-          detectedVersion = (vRes.stdout || '').trim();
-        }
-      } else { binary = 'hardhat'; args = ['compile']; isAvailable = false; }
+      } else {
+        binary = 'npx';
+        args = ['hardhat', 'compile'];
+        isAvailable = this.isBinaryAvailable(binary, ['hardhat', '--version']);
+      }
+      if (isAvailable && spawnSyncFn) {
+        const checkArgs = args[0] === 'hardhat' ? ['hardhat', '--version'] : ['--version'];
+        const vRes = spawnSyncFn(binary, checkArgs, { encoding: 'utf8', cwd: workspacePath });
+        detectedVersion = (vRes.stdout || '').trim();
+      }
     } else if (compiler === 'anchor') {
       binary = 'anchor';
       args = ['build'];

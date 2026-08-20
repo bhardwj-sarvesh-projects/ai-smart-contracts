@@ -39,7 +39,7 @@ export default function SettingsModal({ isOpen, onClose, theme = 'light' }: Sett
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl border p-4 border-slate-500/10">
               <p className="text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1.5"><Lock size={11} /> Provider</p>
-              <p className="mt-2 font-mono text-sm">Groq Intelligent Router</p>
+              <p className="mt-2 font-mono text-sm">Platform AI Router</p>
             </div>
             <div className="rounded-xl border p-4 border-slate-500/10">
               <p className="text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1.5"><Lock size={11} /> Model</p>
@@ -57,7 +57,7 @@ export default function SettingsModal({ isOpen, onClose, theme = 'light' }: Sett
 
           <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-4 text-xs text-slate-400">
             <p className="font-semibold text-indigo-400 mb-1">Automatic failover enabled</p>
-            <p>The platform automatically selects the appropriate hardcoded model for each task and moves through the configured Groq credential pool when a route fails.</p>
+            <p>The platform routes each task through the administrator-configured AI credential pool. Each credential keeps its provider and exact model, with automatic failover when a route fails.</p>
           </div>
         </div>
 

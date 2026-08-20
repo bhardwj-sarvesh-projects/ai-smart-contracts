@@ -1,5 +1,4 @@
 import { AIProvider } from "./AIProvider";
-import { GroqProvider } from "./GroqProvider";
 
 export function isDummyOrEmptyKey(key: string, _provider?: string): boolean {
   if (!key) return true;
@@ -9,11 +8,13 @@ export function isDummyOrEmptyKey(key: string, _provider?: string): boolean {
 
 export class ProviderFactory {
   /**
-   * Legacy compatibility only. New production execution goes through AIOrchestrator,
-   * which owns credential and model routing.
+   * Legacy compatibility guard.
+   *
+   * Direct provider construction is intentionally disabled. API credentials and
+   * model selection are owned by AIOrchestrator and must never be supplied by a
+   * user-controlled settings object.
    */
-  static getProvider(settings: any): AIProvider {
-    if (!settings?.apiKey) throw new Error("Direct provider access is disabled. Use AIOrchestrator.");
-    return new GroqProvider({ apiKey: settings.apiKey, model: settings.defaultModel, temperature: 0.1, maxTokens: 65536 });
+  static getProvider(_settings?: unknown): AIProvider {
+    throw new Error("Direct provider access is disabled. All AI execution must use AIOrchestrator.");
   }
 }

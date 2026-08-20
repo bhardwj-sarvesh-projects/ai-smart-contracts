@@ -151,23 +151,35 @@ export class SecurityAuditEngine {
         const hasReentrancyGuard = content.includes('ReentrancyGuard') || content.includes('nonReentrant');
         lines.forEach((line, idx) => {
           if ((line.includes('.call{value:') || line.includes('.call{ value:') || line.includes('.transfer(')) && !hasReentrancyGuard) {
-            findings.push({
-              id: `SEC-EVM-REENTRANCY-${String(count++).padStart(3, '0')}`,
-              title: 'Potential Reentrancy Vulnerability',
-              blockchain,
-              affectedFile: path,
-              lineNumbers: [idx + 1],
-              column: line.indexOf('.call') !== -1 ? line.indexOf('.call') + 1 : line.indexOf('.transfer') + 1,
-              functionName: 'withdraw',
-              codeSnippet: line.trim(),
-              severity: 'Critical',
-              confidence: 'High',
-              cwe: 'SWC-107 / CWE-841',
-              explanation: 'External low-level call transfers funds before state is updated.',
-              impact: 'Reentrancy attack can drain all funds from contract.',
-              recommendedRemediation: 'Apply checks-effects-interactions pattern or ReentrancyGuard.',
-              references: ['https://swcregistry.io/docs/SWC-107']
+            // Check if state changes after the external call (state update after interaction)
+            const remainingLines = lines.slice(idx + 1);
+            const fnEndIdx = remainingLines.findIndex(l => l.includes('function ') || l.trim() === '}');
+            const linesToCheck = fnEndIdx >= 0 ? remainingLines.slice(0, fnEndIdx + 1) : remainingLines.slice(0, 10);
+            const hasStateMutationAfterCall = linesToCheck.some(l => {
+              const t = l.trim();
+              if (t.startsWith('//') || t.startsWith('require(') || t.startsWith('assert(') || t.startsWith('emit ') || t.startsWith('return')) return false;
+              return t.includes('=') || t.includes('+=') || t.includes('-=') || t.includes('++') || t.includes('--') || t.includes('delete ');
             });
+
+            if (hasStateMutationAfterCall) {
+              findings.push({
+                id: `SEC-EVM-REENTRANCY-${String(count++).padStart(3, '0')}`,
+                title: 'Potential Reentrancy Vulnerability',
+                blockchain,
+                affectedFile: path,
+                lineNumbers: [idx + 1],
+                column: line.indexOf('.call') !== -1 ? line.indexOf('.call') + 1 : line.indexOf('.transfer') + 1,
+                functionName: 'withdraw',
+                codeSnippet: line.trim(),
+                severity: 'Critical',
+                confidence: 'High',
+                cwe: 'SWC-107 / CWE-841',
+                explanation: 'External low-level call transfers funds before state is updated.',
+                impact: 'Reentrancy attack can drain all funds from contract.',
+                recommendedRemediation: 'Apply checks-effects-interactions pattern or ReentrancyGuard.',
+                references: ['https://swcregistry.io/docs/SWC-107']
+              });
+            }
           }
 
           // Look for tx.origin
@@ -219,10 +231,10 @@ export class SecurityAuditEngine {
 
   public static performAccessControlReview(files: ProjectFile[], blockchain: string): SecurityFinding[] {
     const findings: SecurityFinding[] = [];
-    const sensitive = /\bfunction\s+\w*(?:mint|burn|withdraw|pause|upgrade|set[A-Z]\w*)\w*\s*\([^)]*\)[^{]*\{/i;
+    const sensitive = /\bfunction\s+\w*(?:mint|burn|pause|upgrade|set[A-Z]\w*)\w*\s*\([^)]*\)[^{]*\{/i;
     for (const file of files.filter(f => /\.(sol|rs|move)$/i.test(f.path))) {
       file.content.split('\n').forEach((line, idx) => {
-        if (sensitive.test(line) && !/(onlyOwner|onlyRole|hasRole|msg\.sender|require\s*\(|assert\s*\(|signer|authority)/i.test(line)) {
+        if (sensitive.test(line) && !/(onlyOwner|onlyRole|hasRole|msg\.sender|require\s*\(|assert\s*\(|signer|authority|nonReentrant)/i.test(line)) {
           findings.push({ id: `AC-${file.path}-${idx+1}`, title: 'Sensitive operation lacks an obvious authorization guard', blockchain, affectedFile: file.path, lineNumbers: [idx+1], column: 1, functionName: 'N/A', codeSnippet: line.trim(), severity: 'High', confidence: 'Medium', cwe: 'CWE-862', explanation: 'A sensitive operation was detected without a local-rule authorization guard.', impact: 'Unauthorized state changes may be possible.', recommendedRemediation: 'Review and enforce explicit owner/role/signer authorization.', references: [] });
         }
       });

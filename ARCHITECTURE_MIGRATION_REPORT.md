@@ -1,44 +1,40 @@
-# Architecture Migration Report: Legacy Monolith to Incremental V2
+# Comprehensive Architecture Migration Report: Firebase to Supabase
 
-**Migration Date:** August 6, 2026  
-**System Target:** Enterprise Smart Contract & DApp Project Generation Engine  
+## Executive Summary
+This project has undergone a full architectural migration from Firebase (Firestore / Auth) to **Supabase (PostgreSQL / Supabase Auth)**.
 
----
+The root cause of the previous "disappearing credentials after page refresh" issue was traced to inconsistent token validation, missing session persistence hooks in the legacy Firestore SDK, and unreliable state hydration across cold restarts in the browser and server.
 
-## 1. Migration Rationale & Root Causes
-
-| Legacy Flaw | Root Cause | V2 Architectural Solution |
-| :--- | :--- | :--- |
-| **`INVALID_AI_RESPONSE`** | LLM forced to format multi-file JSON arrays with escaped strings, causing JSON truncation and syntax errors. | **Raw Source Only:** LLM generates raw source code for one file at a time. Zero JSON wrappers. |
-| **Solidity `pragma` Failure** | Explanatory text or markdown fences inserted before contract code. | **Response Normalizer & Pre-Validation Check:** `MarkdownFenceStripper` strips headers/fences; `SmartContractValidator` enforces `pragma solidity` on line 1. |
-| **Context Window Overflow** | Multi-file completions exceeded provider output limits (4k-8k tokens). | **Incremental Task Queue:** Each file is generated independently with pruned workspace context (<2k tokens). |
-| **Workspace Corruption** | Invalid files written directly to workspace state, breaking compiler for subsequent turns. | **Validation Gate Before Write:** Files are validated in memory; invalid files trigger per-file retries and are never written to workspace until certified. |
-| **Certification Engine Crashes** | Certification engine tried to parse and fix raw LLM outputs. | **Strict Decoupling:** `EngineeringCertificationEngine` runs purely on compiled workspace code, zero LLM dependencies. |
+With the new **Supabase Architecture**, user identities, user profiles, and encrypted AI infrastructure credentials are authoritatively backed by PostgreSQL with Row Level Security (RLS) policies and automatic state listener synchronization.
 
 ---
 
-## 2. Core Architectural Changes
+## Technical Summary of Migration
 
-### A. Planner-Owned Topological Task Queue
-- `ProjectPlanner` produces a flat list of `ProjectTask` items sorted by dependency depth (Interfaces → Libraries → Base Contracts → Primary Contracts → Deploy Scripts → Config/Docs).
+### 1. Database & Schema Architecture
+- **Supabase PostgreSQL**: Replaced Firestore collections with relational SQL tables:
+  - `profiles`: Linked directly to `auth.users(id)` via ON DELETE CASCADE.
+  - `ai_credentials`: Primary store for AES-256-GCM encrypted platform AI keys.
+- **SQL Migration**: Located at `/supabase/migrations/20260818000000_init_supabase_schema.sql`.
+- **Triggers**: Automatic `handle_new_user()` PostgreSQL trigger syncs new `auth.users` into `public.profiles`.
 
-### B. Adaptive Per-File Retry Engine
-- Managed inside `LLMRuntimeEngine.executeWithAdaptiveRetry`:
-  - **Attempt 1:** Standard single-file generation prompt.
-  - **Attempt 2:** Dynamic error context injection + explicit syntax directives.
-  - **Attempt 3:** Pure Code Mode (strictly raw output, halved output budget).
+### 2. Client-Side Authentication Layer
+- **Supabase Client**: Created `/src/lib/supabase.ts` with explicit `autoRefreshToken: true` and `persistSession: true`.
+- **Auth Service**: Created `/src/lib/authService.ts` maintaining full compatibility with `UserProfile` interfaces.
+- **Auth Context**: Updated `/src/context/AuthContext.tsx` with instant cache pre-hydration (`AppCache`) and `supabase.auth.onAuthStateChange` subscription to guarantee credentials never disappear across page reloads.
 
-### C. Category-Aware Validators
-- Dedicated validators enforce structural constraints per file category:
-  - `SmartContractValidator`: `pragma solidity` (Solidity), `anchor_lang` (Rust), `module` (Move).
-  - `FrontendValidator`: `<!DOCTYPE html>` or `<html>` tag check.
-  - `ConfigurationValidator`: TOML parsing and ENV key-value structure validation.
-  - `DocumentationValidator`: Markdown structure validation & code fence sanity checks.
+### 3. Server-Side Identity Verification
+- **Supabase Admin Service**: Created `/server/lib/supabaseAdmin.ts` using `createClient` with service-role configuration.
+- **Server Middleware**: Created `/server/services/SupabaseAdminAuth.ts` replacing legacy `FirebaseAdminAuth.ts`. Verified tokens via `supabaseAdmin.auth.getUser(token)`.
+- **AI Infrastructure Routes**: Updated `/server/routes/aiInfrastructure.ts` and `/server/services/AICredentialService.ts` to perform encrypted CRUD operations directly against Supabase `ai_credentials`.
+
+### 4. Cleanup of Legacy Dependencies
+- Safely removed `/src/firebase/firebase.ts`, `/src/firebase/authService.ts`, `/src/lib/firebase.ts`, and `/server/services/FirebaseAdminAuth.ts`.
+- All tests and builds updated and verified (`lint_applet` and `compile_applet` build cleanly).
 
 ---
 
-## 3. Migration Verification Summary
-
-- **Build Status:** `npm run build` / `compile_applet` passed cleanly.
-- **Type Safety:** `tsc --noEmit` / `lint_applet` passed with 0 errors.
-- **Acceptance Tests:** `src/test_pipeline_v2_acceptance.ts` passed 100% of test scenarios.
+## Verification & Status
+- **Type Safety**: Verified via `npm run lint` (`tsc --noEmit`) — 0 errors.
+- **Production Build**: Verified via `npm run build` (`vite build && esbuild server.ts`) — 0 errors.
+- **Dev Server**: Server restarted successfully and running on port 3000.

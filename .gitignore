@@ -8,3 +8,9 @@ coverage/
 !.env.example
 # Server-side AI credential store (local fallback; encrypted at rest)
 data/ai_credentials.json
+# Service accounts & secrets
+*firebase-adminsdk*.json
+*serviceAccount*.json
+*service-account*.json
+*.pem
+*.key

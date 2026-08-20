@@ -13,6 +13,7 @@ interface PipelineDashboardProps {
   isCompiling: boolean;
   isDeploying: boolean;
   theme?: 'dark' | 'light';
+  authedFetch: (url: string, options?: RequestInit) => Promise<Response>;
 }
 
 interface PipelineStep {
@@ -30,7 +31,8 @@ function PipelineDashboard({
   onDeploy,
   isCompiling,
   isDeploying,
-  theme = 'dark'
+  theme = 'dark',
+  authedFetch,
 }: PipelineDashboardProps) {
   const isDark = theme === 'dark';
   const [activeStepIndex, setActiveStepIndex] = useState<number | null>(null);
@@ -139,7 +141,7 @@ function PipelineDashboard({
     setSteps(prev => prev.map((s, i) => i === 0 ? { ...s, status: 'running', message: 'Saving project workspace structures...' } : s));
     await delay(500);
     try {
-      const saveRes = await fetch(`/api/projects/${project.id}`, {
+      const saveRes = await authedFetch(`/api/projects/${project.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(project)
@@ -170,7 +172,7 @@ function PipelineDashboard({
     const compileStart = performance.now();
     setSteps(prev => prev.map((s, i) => i === 1 ? { ...s, status: 'running', message: `Compiling via real compiler engine...` } : s));
     try {
-      const compileRes = await fetch('/api/compile', {
+      const compileRes = await authedFetch('/api/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -247,7 +249,7 @@ function PipelineDashboard({
     // Stage 5: Security Validation
     setSteps(prev => prev.map((s, i) => i === 4 ? { ...s, status: 'running', message: 'Executing Security Validation audit scan...' } : s));
     try {
-      const auditRes = await fetch('/api/audit', {
+      const auditRes = await authedFetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ files: project.files })
@@ -344,7 +346,7 @@ function PipelineDashboard({
     // Stage 9: Broadcast Transaction
     setSteps(prev => prev.map((s, i) => i === 8 ? { ...s, status: 'running', message: 'Broadcasting deployment transaction to RPC network endpoint...' } : s));
     try {
-      const deployRes = await fetch('/api/deploy', {
+      const deployRes = await authedFetch('/api/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -301,7 +301,7 @@ export class EngineeringCertificationEngine {
   }
 
   public static collectSecurityResults(securityAuditResult?: SecurityAuditResult | any): GateStatus {
-    if (!securityAuditResult) {
+    if (!securityAuditResult || securityAuditResult.status === 'NOT_VERIFIED') {
       return {
         name: 'Enterprise Security Engine',
         status: 'NOT_VERIFIED',
@@ -317,7 +317,7 @@ export class EngineeringCertificationEngine {
     );
     const criticals = securityAuditResult.criticalCount ?? (securityAuditResult as any).criticalFindings ?? 0;
     const highs = securityAuditResult.highCount ?? (securityAuditResult as any).highFindings ?? 0;
-    const isPassStatus = securityAuditResult.status === 'CERTIFIED_SECURE' && securityAuditResult.verified === true;
+    const isPassStatus = (securityAuditResult.status === 'CERTIFIED_SECURE' || securityAuditResult.overallStatus === 'PASS' || securityAuditResult.status === 'PASS') && (securityAuditResult.verified !== false);
 
     if (!hasAuditEvidence) {
       return {
@@ -339,12 +339,22 @@ export class EngineeringCertificationEngine {
       };
     }
 
+    if (securityAuditResult.status === 'DEPLOYMENT_BLOCKED' || criticals > 0 || highs > 0 || securityAuditResult.overallStatus === 'FAIL' || securityAuditResult.status === 'FAIL') {
+      return {
+        name: 'Enterprise Security Engine',
+        status: 'FAIL',
+        passed: false,
+        score: 0,
+        details: `Security audit failed: ${criticals} Critical, ${highs} High findings detected.`
+      };
+    }
+
     return {
       name: 'Enterprise Security Engine',
-      status: 'FAIL',
+      status: 'NOT_VERIFIED',
       passed: false,
       score: 0,
-      details: `Security audit failed: ${criticals} Critical, ${highs} High findings detected.`
+      details: 'Security audit evidence incomplete (NOT_VERIFIED).'
     };
   }
 

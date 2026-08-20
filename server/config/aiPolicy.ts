@@ -1,11 +1,29 @@
 /**
- * AUTHORITATIVE AI POLICY
+ * AI Contracts — authoritative Groq policy.
  *
- * This file is intentionally code-controlled. Do not expose these values through
- * user settings or the Admin Panel. Administrators manage credentials only.
+ * Design goals:
+ * - exactly 20 platform-managed Groq credential slots
+ * - three locked models per workload group
+ * - deterministic credential rotation inside each workload group
+ * - predictable default output budget of 2,000 tokens
+ * - no user/admin model selection
  */
 export const AI_TEMPERATURE = 0.1 as const;
-export const GLOBAL_MAX_OUTPUT_TOKENS = 65536 as const;
+
+const ENV_DEFAULT = Number(process.env.AI_DEFAULT_MAX_OUTPUT_TOKENS || 2000);
+export const AI_DEFAULT_MAX_OUTPUT_TOKENS = Number.isFinite(ENV_DEFAULT)
+  ? Math.max(256, Math.min(Math.floor(ENV_DEFAULT), 2000))
+  : 2000;
+
+export const GLOBAL_MAX_OUTPUT_TOKENS = AI_DEFAULT_MAX_OUTPUT_TOKENS;
+export const AI_MAX_GENERATION_TOKENS = AI_DEFAULT_MAX_OUTPUT_TOKENS;
+
+export const GROQ_MAX_CREDENTIALS = Math.max(
+  1,
+  Math.min(Number(process.env.GROQ_MAX_CREDENTIALS || 20), 20),
+);
+
+export const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 
 export type AITask =
   | "architecture"
@@ -18,112 +36,208 @@ export type AITask =
   | "security_remediation"
   | "documentation"
   | "copilot"
-  | "repository_analysis"
-  | "research";
+  | "research"
+  | "ARCHITECTURE_PLANNING"
+  | "SMART_CONTRACT_GENERATION"
+  | "CODE_EDITING"
+  | "COMPILER_REPAIR"
+  | "TEST_GENERATION"
+  | "TEST_ANALYSIS"
+  | "SECURITY_ANALYSIS"
+  | "SECURITY_REMEDIATION"
+  | "DOCUMENTATION"
+  | "CODE_EXPLANATION"
+  | "REPOSITORY_ANALYSIS"
+  | "EXTERNAL_RESEARCH"
+  | "GENERAL_COPILOT";
 
 export interface ModelPolicyEntry {
   model: string;
   maxOutputTokens: number;
 }
 
-const PRODUCTION_MODELS = {
-  GPT_OSS_120B: "openai/gpt-oss-120b",
-  GPT_OSS_20B: "openai/gpt-oss-20b",
-  QWEN_3_6_27B: "qwen/qwen3.6-27b",
-  COMPOUND: "groq/compound",
-} as const;
+export interface AIRoutingGroup {
+  id: string;
+  label: string;
+  slots: readonly number[];
+  tasks: readonly AITask[];
+  models: readonly ModelPolicyEntry[];
+}
+
+const MODEL_LIMITS: Record<string, number> = Object.freeze({
+  "openai/gpt-oss-120b": 65_536,
+  "openai/gpt-oss-20b": 65_536,
+  "qwen/qwen3.6-27b": 65_536,
+  "groq/compound": 8_192,
+  "llama-3.1-8b-instant": 131_072,
+});
+
+const model = (id: string): ModelPolicyEntry => ({
+  model: id,
+  maxOutputTokens: Math.min(
+    GLOBAL_MAX_OUTPUT_TOKENS,
+    MODEL_LIMITS[id] ?? GLOBAL_MAX_OUTPUT_TOKENS,
+  ),
+});
 
 /**
- * Model order is deliberately hardcoded. Credentials are supplied separately
- * by the Admin-controlled credential pool.
+ * Three locked model choices per workload group.
+ * The first model is the deterministic primary.
+ * Fallbacks are only used for model-access failures, not to spam a
+ * provider that is already organization-rate-limited.
  */
-export const AI_MODEL_POLICY: Readonly<Record<AITask, readonly ModelPolicyEntry[]>> = Object.freeze({
-  architecture: [
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-  ],
-  generation: [
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-  ],
-  edit: [
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-  ],
-  repair: [
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-  ],
-  testing: [
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-  ],
-  test_analysis: [
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-  ],
-  security: [
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-  ],
-  security_remediation: [
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-  ],
-  documentation: [
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-  ],
-  copilot: [
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-  ],
-  repository_analysis: [
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-    { model: PRODUCTION_MODELS.GPT_OSS_20B, maxOutputTokens: 65536 },
-  ],
-  research: [
-    { model: PRODUCTION_MODELS.COMPOUND, maxOutputTokens: 8192 },
-    { model: PRODUCTION_MODELS.GPT_OSS_120B, maxOutputTokens: 65536 },
-    { model: PRODUCTION_MODELS.QWEN_3_6_27B, maxOutputTokens: 16384 },
-  ],
-});
+const ROUTING_GROUPS: readonly AIRoutingGroup[] = Object.freeze([
+  {
+    id: "architecture",
+    label: "Architecture & Repository Analysis",
+    slots: [1, 2, 3],
+    tasks: ["architecture", "ARCHITECTURE_PLANNING", "REPOSITORY_ANALYSIS"],
+    models: Object.freeze([
+      model("openai/gpt-oss-120b"),
+      model("qwen/qwen3.6-27b"),
+      model("openai/gpt-oss-20b"),
+    ]),
+  },
+  {
+    id: "generation",
+    label: "Smart Contract Generation",
+    slots: [4, 5, 6],
+    tasks: ["generation", "SMART_CONTRACT_GENERATION"],
+    models: Object.freeze([
+      model("openai/gpt-oss-120b"),
+      model("openai/gpt-oss-20b"),
+      model("qwen/qwen3.6-27b"),
+    ]),
+  },
+  {
+    id: "editing-repair",
+    label: "Code Editing & Repair",
+    slots: [7, 8, 9],
+    tasks: ["edit", "repair", "CODE_EDITING", "COMPILER_REPAIR"],
+    models: Object.freeze([
+      model("openai/gpt-oss-120b"),
+      model("openai/gpt-oss-20b"),
+      model("qwen/qwen3.6-27b"),
+    ]),
+  },
+  {
+    id: "testing",
+    label: "Testing & Test Analysis",
+    slots: [10, 11, 12],
+    tasks: ["testing", "test_analysis", "TEST_GENERATION", "TEST_ANALYSIS"],
+    models: Object.freeze([
+      model("openai/gpt-oss-20b"),
+      model("openai/gpt-oss-120b"),
+      model("qwen/qwen3.6-27b"),
+    ]),
+  },
+  {
+    id: "security",
+    label: "Security Audit & Remediation",
+    slots: [13, 14, 15],
+    tasks: ["security", "security_remediation", "SECURITY_ANALYSIS", "SECURITY_REMEDIATION"],
+    models: Object.freeze([
+      model("openai/gpt-oss-120b"),
+      model("qwen/qwen3.6-27b"),
+      model("openai/gpt-oss-20b"),
+    ]),
+  },
+  {
+    id: "documentation-copilot",
+    label: "Documentation & Copilot",
+    slots: [16, 17, 18],
+    tasks: ["documentation", "copilot", "DOCUMENTATION", "CODE_EXPLANATION", "GENERAL_COPILOT"],
+    models: Object.freeze([
+      model("openai/gpt-oss-20b"),
+      model("qwen/qwen3.6-27b"),
+      model("openai/gpt-oss-120b"),
+    ]),
+  },
+  {
+    id: "research-compile",
+    label: "Research & Compilation Analysis",
+    slots: [19, 20],
+    tasks: ["research", "EXTERNAL_RESEARCH"],
+    models: Object.freeze([
+      model("groq/compound"),
+      model("openai/gpt-oss-120b"),
+      model("qwen/qwen3.6-27b"),
+    ]),
+  },
+]);
 
-export const MODEL_CONTEXT_LIMITS: Readonly<Record<string, number>> = Object.freeze({
-  [PRODUCTION_MODELS.GPT_OSS_120B]: 131072,
-  [PRODUCTION_MODELS.GPT_OSS_20B]: 131072,
-  [PRODUCTION_MODELS.QWEN_3_6_27B]: 131072,
-  [PRODUCTION_MODELS.COMPOUND]: 131072,
-});
+const NORMALIZED_TASK_TO_GROUP: Record<string, string> = Object.freeze(
+  Object.fromEntries(
+    ROUTING_GROUPS.flatMap((group) => group.tasks.map((task) => [String(task).toLowerCase(), group.id])),
+  ),
+);
+
+export const AI_ROUTING_GROUPS = ROUTING_GROUPS;
+
+function normalizeTask(task: AITask): string {
+  return String(task || "").trim().toLowerCase();
+}
+
+export function getRoutingGroupForTask(task: AITask): AIRoutingGroup {
+  const groupId = NORMALIZED_TASK_TO_GROUP[normalizeTask(task)] || "documentation-copilot";
+  return ROUTING_GROUPS.find((group) => group.id === groupId) || ROUTING_GROUPS[5];
+}
+
+export function getRoutingGroupForSlot(slot: number): AIRoutingGroup {
+  const normalized = Math.max(1, Math.floor(Number(slot) || 1));
+  return ROUTING_GROUPS.find((group) => group.slots.includes(normalized)) || ROUTING_GROUPS[0];
+}
+
+export function getRoutingGroupIdForSlot(slot: number): string {
+  return getRoutingGroupForSlot(slot).id;
+}
 
 export function getModelPolicy(task: AITask): readonly ModelPolicyEntry[] {
-  return AI_MODEL_POLICY[task] || AI_MODEL_POLICY.copilot;
+  return getRoutingGroupForTask(task).models;
 }
 
-export function getEffectiveMaxOutputTokens(model: string, requested?: number): number {
-  const modelLimit = AI_MODEL_POLICY
-    ? Object.values(AI_MODEL_POLICY).flat().find(entry => entry.model === model)?.maxOutputTokens
-    : undefined;
-  const hardLimit = modelLimit || GLOBAL_MAX_OUTPUT_TOKENS;
-  if (!requested || !Number.isFinite(requested)) return hardLimit;
-  return Math.max(256, Math.min(Math.floor(requested), hardLimit));
+export function getModelMaxOutputTokens(modelId: string): number {
+  return MODEL_LIMITS[modelId] ?? GLOBAL_MAX_OUTPUT_TOKENS;
 }
+
+export function getEffectiveMaxOutputTokens(modelId: string, requested?: number): number {
+  const ceiling = getModelMaxOutputTokens(modelId);
+  if (!requested || !Number.isFinite(requested)) return Math.min(ceiling, GLOBAL_MAX_OUTPUT_TOKENS);
+  return Math.max(
+    256,
+    Math.min(Math.floor(requested), ceiling, GLOBAL_MAX_OUTPUT_TOKENS),
+  );
+}
+
+export function isPlatformManagedModel(modelId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(MODEL_LIMITS, modelId);
+}
+
+export const AI_MODEL_POLICY: Readonly<Record<string, readonly ModelPolicyEntry[]>> = Object.freeze(
+  Object.fromEntries(
+    ROUTING_GROUPS.flatMap((group) => group.tasks.map((task) => [task, group.models])),
+  ),
+);
 
 export function getPublicPolicy() {
   return Object.fromEntries(
-    Object.entries(AI_MODEL_POLICY).map(([task, entries]) => [
+    Object.entries(
+      Object.fromEntries(
+        ROUTING_GROUPS.flatMap((group) => group.tasks.map((task) => [task, group.models])),
+      ),
+    ).map(([task, entries]) => [
       task,
-      entries.map(entry => ({ model: entry.model, maxOutputTokens: entry.maxOutputTokens }))
-    ])
+      (entries as readonly ModelPolicyEntry[]).map((entry) => ({ ...entry })),
+    ]),
   );
+}
+
+export function getPublicRoutingGroups() {
+  return ROUTING_GROUPS.map((group) => ({
+    id: group.id,
+    label: group.label,
+    slots: [...group.slots],
+    tasks: [...group.tasks],
+    models: group.models.map((entry) => ({ ...entry })),
+  }));
 }

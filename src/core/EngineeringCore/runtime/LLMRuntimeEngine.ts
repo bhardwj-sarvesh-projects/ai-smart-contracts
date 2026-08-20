@@ -25,17 +25,22 @@ export const PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
   },
   groq: {
     contextWindow: 131072,
-    maxOutputTokens: 65536,
+    maxOutputTokens: 2000,
     supportsStreaming: true,
     supportsJSON: true,
     supportsToolCalling: true,
-    recommendedOutputTokens: 65536,
+    recommendedOutputTokens: 2000,
   },
 };
 
-export function detectProvider(_modelOrName?: string): string {
-  // AI execution is now owned by the server-side Groq Intelligent Router.
-  // The client/pipeline cannot select a provider or model.
+export function detectProvider(modelOrName?: string): string {
+  if (!modelOrName) return "groq";
+  const m = modelOrName.toLowerCase();
+  // AI Contracts currently routes all production AI execution through Groq.
+  // This function is retained for runtime budgeting/observability only; the actual
+  // credential and model are selected server-side by AIOrchestrator.
+  if (m.includes("groq") || m.includes("qwen") || m.includes("gpt-oss")) return "groq";
+  if (m.includes("openai")) return "openai";
   return "groq";
 }
 
@@ -60,7 +65,7 @@ export function calculateDynamicBudget(
 
   // Formula: safeOutput = min(provider.maxOutputTokens, remainingContext, targetUserLimit, fileCategoryMax)
   const targetUserLimit = userLimit ? Math.min(userLimit, fileCategoryMax) : fileCategoryMax;
-  let safeOutputTokens = Math.min(provider.maxOutputTokens, remainingContext, targetUserLimit, fileCategoryMax);
+  let safeOutputTokens = Math.min(provider.maxOutputTokens, 2000, remainingContext, targetUserLimit, fileCategoryMax);
   
   // Hard clamp to ensure config files never exceed hard limit
   safeOutputTokens = Math.min(safeOutputTokens, fileCategoryMax);
@@ -140,7 +145,8 @@ export function pruneWorkspaceFiles(
 export function buildPrunedWorkspaceContext(
   targetPath: string,
   generatedFiles: ProjectFile[],
-  projectProfile?: any
+  projectProfile?: any,
+  maxTokens?: number
 ): string {
   if (TokenBudgetEngine.isConfigFile(targetPath)) {
     const eco = projectProfile?.blockchain || 'Ecosystem';
@@ -152,10 +158,33 @@ export function buildPrunedWorkspaceContext(
 
   const pruned = pruneWorkspaceFiles(targetPath, generatedFiles);
   if (pruned.length === 0) return "(Minimal context)";
-  
-  return pruned
-    .map(gf => `File: ${gf.path}\n\`\`\`${gf.language}\n${gf.content}\n\`\`\``)
-    .join("\n\n");
+
+  const budgetTokens = typeof maxTokens === 'number' && maxTokens > 0 ? Math.floor(maxTokens) : Number.POSITIVE_INFINITY;
+  const budgetChars = Number.isFinite(budgetTokens) ? Math.max(512, budgetTokens * 4) : Number.POSITIVE_INFINITY;
+  const chunks: string[] = [];
+  let usedChars = 0;
+
+  for (const gf of pruned) {
+    const header = `File: ${gf.path}\n\`\`\`${gf.language || ''}\n`;
+    const footer = `\n\`\`\`\n`;
+    const remaining = budgetChars - usedChars;
+    if (remaining <= header.length + footer.length + 64) break;
+
+    const availableContentChars = remaining - header.length - footer.length;
+    let content = gf.content || '';
+    if (content.length > availableContentChars) {
+      const keep = Math.max(128, Math.floor(availableContentChars * 0.82));
+      const tail = Math.max(64, availableContentChars - keep);
+      content = `${content.slice(0, keep)}\n\n/* [CONTEXT COMPACTED: middle omitted for provider budget] */\n\n${content.slice(-tail)}`;
+    }
+
+    const chunk = `${header}${content}${footer}`;
+    if (usedChars + chunk.length > budgetChars) break;
+    chunks.push(chunk);
+    usedChars += chunk.length;
+  }
+
+  return chunks.length ? chunks.join("\n") : "(Minimal context)";
 }
 
 export interface ObservabilityLog {
@@ -194,7 +223,7 @@ export class LLMRuntimeEngine {
   }
 
   public static async executeWithAdaptiveRetry(
-    aiExecutor: (systemInstruction: string, prompt: string, targetPath?: string, maxTokens?: number, routeAttempt?: number) => Promise<string>,
+    aiExecutor: (systemInstruction: string, prompt: string, targetPath?: string, maxTokens?: number, attempt?: number) => Promise<string>,
     systemInstruction: string,
     prompt: string,
     targetPath: string,
@@ -208,7 +237,7 @@ export class LLMRuntimeEngine {
 
     let currentGeneratedFiles = [...generatedFiles];
     let attempts = 0;
-    const maxRetries = 3;
+    const maxRetries = 2;
     let lastError: any = null;
     const ext = targetPath.split('.').pop()?.toLowerCase() || '';
 
@@ -244,7 +273,35 @@ export class LLMRuntimeEngine {
         targetUserLimit = Math.min(fileMaxTokens, Math.floor(provider.recommendedOutputTokens / 2));
       }
 
-      const workspaceContextText = buildPrunedWorkspaceContext(targetPath, currentGeneratedFiles, projectProfile);
+      // Provider TPM is discovered dynamically from provider responses. Once known,
+      // reserve the request budget between input context and output rather than using
+      // a hard-coded application ceiling. Before the first observed limit, the model
+      // context window remains the governing constraint.
+      const tpmSnapshot = TokenBudgetEngine.getTPMSnapshot(providerKey);
+      const fixedPromptText = `${retrySystemInstruction}\nPlease generate "${targetPath}" now.\n${retryPromptText}`;
+      let contextTokenBudget: number | undefined;
+      if (tpmSnapshot) {
+        const elapsed = Date.now() - tpmSnapshot.lastResetTime;
+        const recentUsage = elapsed >= 60000 ? 0 : Math.max(0, tpmSnapshot.recentTokensUsed);
+        const safety = Math.min(256, Math.max(64, Math.floor(tpmSnapshot.tpmLimit * 0.05)));
+        const available = Math.max(0, tpmSnapshot.tpmLimit - recentUsage - safety);
+        const fixedTokens = TokenBudgetEngine.estimateTokens(fixedPromptText);
+        // Keep a meaningful output reservation, but allow the provider's actual
+        // observed budget to determine the ceiling.
+        const outputReservation = Math.min(
+          targetUserLimit,
+          provider.maxOutputTokens,
+          Math.max(512, Math.floor(Math.max(0, available - fixedTokens) * 0.4))
+        );
+        contextTokenBudget = Math.max(256, available - fixedTokens - outputReservation);
+      }
+
+      const workspaceContextText = buildPrunedWorkspaceContext(
+        targetPath,
+        currentGeneratedFiles,
+        projectProfile,
+        contextTokenBudget
+      );
       const fullPromptText = `
 Workspace Context:
 ${workspaceContextText}
@@ -335,10 +392,13 @@ ${firstFiveLines}`);
         const executionTime = Date.now() - startTime;
 
         const msg = (err.message || String(err)).toLowerCase();
-        const isRateLimit = err.status === 429 || err.isTerminal || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate exceeded") || msg.includes("rate_limit_exceeded") || msg.includes("too many requests") || msg.includes("tpd") || msg.includes("tpm") || msg.includes("rpm") || msg.includes("quota exceeded") || msg.includes("insufficient quota") || msg.includes("insufficient credits");
+        const isContextBudget = err.isContextBudgetError === true || err.status === 413 || msg.includes("provider_context_budget") || (msg.includes("tokens per minute") && msg.includes("requested") && msg.includes("limit"));
+        const isRateLimit = !isContextBudget && (err.status === 429 || err.isTerminal || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate exceeded") || msg.includes("rate_limit_exceeded") || msg.includes("too many requests") || msg.includes("tpd") || msg.includes("tpm") || msg.includes("rpm") || msg.includes("quota exceeded") || msg.includes("insufficient quota") || msg.includes("insufficient credits"));
         const isAuth = err.status === 401 || err.status === 403 || err.status === 402 || msg.includes("401") || msg.includes("403") || msg.includes("402") || msg.includes("invalid_api_key") || msg.includes("unauthorized");
 
-        if (isRateLimit || isAuth) {
+        if (isContextBudget) {
+          console.log(`[LLM RUNTIME] Provider context/TPM budget reached; compacting workspace context before retry.`);
+        } else if (isRateLimit || isAuth) {
           console.log(`[LLM RUNTIME] Terminal rate limit or auth error detected. Bypassing all retries and failing immediately.`);
           throw err;
         }

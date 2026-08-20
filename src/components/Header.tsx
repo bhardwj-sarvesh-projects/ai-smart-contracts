@@ -194,7 +194,7 @@ function Header({
     { id: 'dashboard', name: 'Dashboard', icon: Home, action: () => onChangeTab('dashboard') },
     { id: 'workspace', name: 'Projects', icon: Code2, action: () => onChangeTab('workspace') },
     { id: 'auditing', name: 'Audit', icon: Shield, action: () => onChangeTab('auditing') },
-    { id: 'templates', name: 'Templates', icon: Library, action: onToggleTemplateLibrary },
+    
   ];
 
   // Find configuration for active project blockchain

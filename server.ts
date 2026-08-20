@@ -1,94 +1,106 @@
 import express from "express";
 import path from "path";
-import fs from "fs";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
-import dotenv from "dotenv";
+import "dotenv/config";
 import { AIService } from "./server/services/AIService";
 import { AI_TEMPERATURE, GLOBAL_MAX_OUTPUT_TOKENS } from "./server/config/aiPolicy";
-import { SettingsService, UserConfig } from "./server/services/SettingsService";
-import { requireAdminUser, requireAuthenticatedUser } from "./server/services/FirebaseAdminAuth";
+import { UserConfig } from "./server/services/SettingsService";
+import { requireAdminUser, requireAuthenticatedUser } from "./server/services/SupabaseAdminAuth";
+import { getSupabaseAdmin, isSupabaseAdminConfigured } from "./server/lib/supabaseAdmin";
 import settingsRouter from "./server/routes/settings";
 import aiInfrastructureRouter from "./server/routes/aiInfrastructure";
 import { PatchEngine } from "./src/core/EngineeringCore/patch/PatchEngine";
 import { ProjectIntegrityEngine } from "./src/core/EngineeringCore/validators/ProjectIntegrityEngine";
 import { SecurityAuditEngine } from "./src/core/EngineeringCore/security/SecurityAuditEngine";
 import { CompilerEngine } from "./src/core/EngineeringCore/compiler/CompilerEngine";
+import { redactSecrets, safeErrorMessage } from "./server/utils/secretRedaction";
 
-dotenv.config();
+
+function parseCliArg(flag: string): string | undefined {
+  const idx = process.argv.indexOf(flag);
+  if (idx !== -1 && process.argv[idx + 1] && !process.argv[idx + 1].startsWith("-")) {
+    return process.argv[idx + 1];
+  }
+  return undefined;
+}
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(parseCliArg("--port") || process.env.PORT || process.env.SERVER_PORT || 3000);
+const HOST = parseCliArg("--host") || process.env.HOST || "0.0.0.0";
 
 app.use(express.json({ limit: '10mb' }));
 
 // AI configuration is authoritative on the server. User requests cannot select
 // providers, models, API keys, temperature, or token limits.
 function getActiveUserConfig(req: express.Request): UserConfig {
-  const userId = (req as any).firebaseUser?.uid || (req.headers["x-user-id"] as string) || "default";
-  const email = (req as any).firebaseUser?.email || (req.headers["x-user-email"] as string) || "default@smartcontract.ai";
-  const displayName = (req as any).firebaseUser?.name || (req.headers["x-user-name"] as string) || "User";
-  const photo = (req.headers["x-user-photo"] as string) || "";
+  const user = (req as any).user || (req as any).supabaseUser || (req as any).firebaseUser;
+  if (!user?.id && !user?.uid) {
+    throw new Error("Authenticated user identity is required.");
+  }
+
+  const userId = String(user.id || user.uid);
   return {
-    userId, email, displayName, photo, provider: "groq", apiKey: "",
-    defaultModel: "platform-router", temperature: AI_TEMPERATURE,
-    maxTokens: GLOBAL_MAX_OUTPUT_TOKENS, createdDate: new Date().toISOString(),
+    userId,
+    email: String(user.email || ""),
+    displayName: String(user.name || user.email || "User"),
+    photo: String(user.picture || ""),
+    provider: "platform-router",
+    apiKey: "",
+    defaultModel: "platform-router",
+    temperature: AI_TEMPERATURE,
+    maxTokens: GLOBAL_MAX_OUTPUT_TOKENS,
+    createdDate: new Date().toISOString(),
     updatedDate: new Date().toISOString(),
   };
 }
 
-// Mount AI Settings Router
-app.use("/api/settings", settingsRouter);
-app.use("/api/admin/ai", aiInfrastructureRouter);
+const apiRouter = express.Router();
 
-// All AI execution endpoints require a verified Firebase identity.
-app.use("/api/generate", requireAuthenticatedUser);
-app.use("/api/generate-plan", requireAuthenticatedUser);
-app.use("/api/edit", requireAuthenticatedUser);
-app.use("/api/audit", requireAuthenticatedUser);
-app.use("/api/compile", requireAuthenticatedUser);
+// Enforce JSON & No-Cache Headers for all API responses
+apiRouter.use((_req, res, next) => {
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  next();
+});
+
+// Mount AI Settings Router & AI Infrastructure Router
+apiRouter.use("/settings", settingsRouter);
+apiRouter.use("/admin/ai", aiInfrastructureRouter);
+
+// Public API health check for runtime/container verification (leaks no secrets)
+apiRouter.get("/healthz", (_req, res) => {
+  return res.json({
+    success: true,
+    service: "api",
+    status: "ok",
+    version: "1.0.0-unified",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// All authenticated application endpoints require a verified Supabase identity.
+// The server derives user identity exclusively from the verified token; x-user-*
+// browser headers are intentionally ignored.
+apiRouter.use("/health", requireAuthenticatedUser);
+apiRouter.use("/test-openai", requireAuthenticatedUser);
+apiRouter.use("/projects", requireAuthenticatedUser);
+apiRouter.use("/generate", requireAuthenticatedUser);
+apiRouter.use("/generate-plan", requireAuthenticatedUser);
+apiRouter.use("/edit", requireAuthenticatedUser);
+apiRouter.use("/audit", requireAuthenticatedUser);
+apiRouter.use("/remediate", requireAuthenticatedUser);
+apiRouter.use("/compile", requireAuthenticatedUser);
+apiRouter.use("/deploy", requireAuthenticatedUser);
 
 
-
-// Helper to access DB path
-const DB_PATH = path.join(process.cwd(), "data", "db.json");
-
-// Ensure data folder and db.json exist
-function ensureDb() {
-  const dir = path.join(process.cwd(), "data");
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  if (!fs.existsSync(DB_PATH)) {
-    fs.writeFileSync(DB_PATH, JSON.stringify({ projects: [] }, null, 2));
-  }
-}
-
-function readDb() {
-  ensureDb();
-  try {
-    const data = fs.readFileSync(DB_PATH, "utf-8");
-    const parsed = JSON.parse(data);
-    if (!parsed || !Array.isArray(parsed.projects)) {
-      return { projects: [] };
-    }
-    return parsed;
-  } catch (err) {
-    console.error("Error reading db.json, returning empty structure", err);
-    return { projects: [] };
-  }
-}
-
-function writeDb(data: any) {
-  ensureDb();
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
-}
 
 // -------------------------------------------------------------
 // API ENDPOINTS
 // -------------------------------------------------------------
 
 // Health Check
-app.get("/api/health", async (req, res) => {
+apiRouter.get("/health", async (req, res) => {
   try {
     const userConfig = getActiveUserConfig(req);
     const result = await AIService.healthCheck(userConfig);
@@ -114,7 +126,7 @@ app.get("/api/health", async (req, res) => {
 });
 
 // Test OpenAI Route
-app.get("/api/test-openai", async (req, res) => {
+apiRouter.get("/test-openai", async (req, res) => {
   try {
     const userConfig = getActiveUserConfig(req);
     const rawResponse = await AIService.testConnection(userConfig);
@@ -123,112 +135,215 @@ app.get("/api/test-openai", async (req, res) => {
       response: rawResponse
     });
   } catch (err: any) {
+    console.error("[TEST OPENAI ROUTE] Failure:", redactSecrets(err));
     return res.status(500).json({
       success: false,
-      error: err.message || String(err),
-      stack: err.stack || "No stack trace available"
+      error: safeErrorMessage(err),
+      ...(process.env.NODE_ENV !== "production" ? { stack: err.stack || "No stack trace available" } : {})
     });
   }
 });
 
-// GET all projects (User Isolated)
-app.get("/api/projects", (req, res) => {
-  const db = readDb();
-  const userId = req.headers["x-user-id"] as string || "default";
-  const userProjects = db.projects.filter((p: any) => (p.userId || "default") === userId);
-  res.json(userProjects);
-});
+function getReqUser(req: any) {
+  return req.user || req.supabaseUser;
+}
 
-// GET a single project (User Isolated)
-app.get("/api/projects/:id", (req, res) => {
-  const db = readDb();
-  const userId = req.headers["x-user-id"] as string || "default";
-  const project = db.projects.find((p: any) => p.id === req.params.id && (p.userId || "default") === userId);
-  if (!project) {
-    return res.status(404).json({ error: "Project not found or access denied" });
+function getReqUserId(req: any): string {
+  const u = getReqUser(req);
+  return String(u?.id || u?.uid || "default");
+}
+
+function requireSupabaseProjectStore() {
+  if (!isSupabaseAdminConfigured()) {
+    const err: any = new Error("Supabase persistence is not configured. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+    err.code = "SUPABASE_NOT_CONFIGURED";
+    err.statusCode = 503;
+    throw err;
   }
-  res.json(project);
+  return getSupabaseAdmin();
+}
+
+function isRequestAdmin(req: express.Request): boolean {
+  const user = getReqUser(req);
+  return String(user?.role || "") === "admin";
+}
+
+function mapProjectRow(p: any, owner?: any) {
+  return {
+    id: p.id,
+    userId: p.user_id,
+    userEmail: owner?.email || p.user_email || undefined,
+    userName: owner?.full_name || p.user_name || undefined,
+    name: p.name,
+    description: p.description,
+    blockchain: p.blockchain,
+    language: p.language,
+    framework: p.framework,
+    contractType: p.contract_type,
+    files: p.files || [],
+    activeFilePath: p.active_file_path || "",
+    audit: p.audit,
+    versions: p.versions || [],
+    deployments: p.deployments || [],
+    createdAt: p.created_at,
+    updatedAt: p.updated_at,
+  };
+}
+
+// GET projects. Normal users receive only their own records. Administrators
+// receive the complete platform project inventory for the main dashboard.
+apiRouter.get("/projects", async (req, res) => {
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    const userId = getReqUserId(req);
+    const query = supabaseAdmin.from("projects").select("*").order("created_at", { ascending: false });
+    const { data, error } = isRequestAdmin(req) ? await query : await query.eq("user_id", userId);
+    if (error) {
+      if (error.code === "PGRST205" || error.code === "42P01") {
+        console.warn("[PROJECTS] Table 'projects' not initialized in Supabase yet. Returning empty list.");
+        return res.json([]);
+      }
+      throw error;
+    }
+    return res.json((data || []).map((p: any) => mapProjectRow(p)));
+  } catch (error: any) {
+    console.error("[PROJECTS] Authoritative read failed:", redactSecrets(error));
+    if (error?.code === "PGRST205" || error?.code === "42P01") {
+      return res.json([]);
+    }
+    return res.status(Number(error?.statusCode) || 503).json({
+      success: false,
+      code: error?.code || "PROJECT_STORAGE_UNAVAILABLE",
+      error: safeErrorMessage(error),
+    });
+  }
 });
 
-// CREATE a new project (User Isolated)
-app.post("/api/projects", (req, res) => {
+// GET a single project. Owners can access their own project; administrators can
+// inspect any project but cannot mutate another user's project through this API.
+apiRouter.get("/projects/:id", async (req, res) => {
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    const userId = getReqUserId(req);
+    let query = supabaseAdmin.from("projects").select("*").eq("id", req.params.id);
+    if (!isRequestAdmin(req)) query = query.eq("user_id", userId);
+    const { data, error } = await query.maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ success: false, error: "Project not found or access denied." });
+    return res.json(mapProjectRow(data));
+  } catch (error: any) {
+    console.error("[PROJECTS] Authoritative single-project read failed:", redactSecrets(error));
+    return res.status(Number(error?.statusCode) || 503).json({ success: false, code: error?.code || "PROJECT_STORAGE_UNAVAILABLE", error: safeErrorMessage(error) });
+  }
+});
+
+// CREATE a new project. Supabase PostgreSQL is the only authoritative store.
+apiRouter.post("/projects", async (req, res) => {
   const { name, description, blockchain, language, framework, contractType, files } = req.body;
-  
   if (!name || !blockchain || !language) {
-    return res.status(400).json({ error: "Missing required fields: name, blockchain, language" });
+    return res.status(400).json({ success: false, error: "Missing required fields: name, blockchain, language" });
   }
 
-  const db = readDb();
-  const userId = req.headers["x-user-id"] as string || "default";
+  const userId = getReqUserId(req);
+  const now = new Date().toISOString();
+  const projectId = `project-${crypto.randomUUID()}`;
+  const initialFiles = Array.isArray(files) ? files : [];
   const newProject = {
-    id: `project-${Date.now()}`,
-    userId: userId, // Enforce User Isolation
-    name,
-    description: description || `A custom ${contractType || 'smart contract'} project on ${blockchain}.`,
+    id: projectId,
+    userId,
+    name: String(name).trim(),
+    description: description || `A custom ${contractType || "smart contract"} project on ${blockchain}.`,
     blockchain,
     language,
     framework: framework || "Default",
     contractType: contractType || "Custom Contract",
-    files: files || [],
-    activeFilePath: files && files.length > 0 ? files[0].path : "",
-    versions: [
-      {
-        id: `v-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        prompt: "Initial Creation",
-        files: files || [],
-        summary: "Project created."
-      }
-    ],
+    files: initialFiles,
+    activeFilePath: initialFiles[0]?.path || "",
+    versions: [{ id: `v-${crypto.randomUUID()}`, timestamp: now, prompt: "Initial Creation", files: initialFiles, summary: "Project created." }],
     deployments: [],
-    createdAt: new Date().toISOString()
+    createdAt: now,
+    updatedAt: now,
   };
 
-  db.projects.push(newProject);
-  writeDb(db);
-  res.status(201).json(newProject);
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    const { data, error } = await supabaseAdmin.from("projects").insert({
+      id: projectId,
+      user_id: userId,
+      name: newProject.name,
+      description: newProject.description,
+      blockchain: newProject.blockchain,
+      language: newProject.language,
+      framework: newProject.framework,
+      contract_type: newProject.contractType,
+      files: newProject.files,
+      active_file_path: newProject.activeFilePath,
+      versions: newProject.versions,
+      deployments: newProject.deployments,
+      created_at: now,
+      updated_at: now,
+    }).select("*").single();
+    if (error || !data) throw error || new Error("Supabase did not return the created project.");
+
+    // Read-after-write verification guarantees the dashboard can retrieve the
+    // same authoritative row after a reload.
+    const { data: verified, error: verifyError } = await supabaseAdmin.from("projects").select("*").eq("id", projectId).eq("user_id", userId).maybeSingle();
+    if (verifyError || !verified) throw verifyError || new Error("Project persistence verification failed.");
+    return res.status(201).json(mapProjectRow(verified));
+  } catch (error: any) {
+    console.error("[PROJECTS] Create persistence failed:", redactSecrets(error));
+    return res.status(Number(error?.statusCode) || 503).json({ success: false, code: error?.code || "PROJECT_PERSISTENCE_FAILED", error: safeErrorMessage(error) });
+  }
 });
 
-// UPDATE project (User Isolated)
-app.put("/api/projects/:id", (req, res) => {
-  const db = readDb();
-  const userId = req.headers["x-user-id"] as string || "default";
-  const index = db.projects.findIndex((p: any) => p.id === req.params.id && (p.userId || "default") === userId);
-  if (index === -1) {
-    return res.status(404).json({ error: "Project not found or access denied" });
+// UPDATE project. Only the owner may mutate a project.
+apiRouter.put("/projects/:id", async (req, res) => {
+  const userId = getReqUserId(req);
+  const now = new Date().toISOString();
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    const payload: Record<string, any> = { updated_at: now };
+    if (req.body.name !== undefined) payload.name = req.body.name;
+    if (req.body.description !== undefined) payload.description = req.body.description;
+    if (req.body.blockchain !== undefined) payload.blockchain = req.body.blockchain;
+    if (req.body.language !== undefined) payload.language = req.body.language;
+    if (req.body.framework !== undefined) payload.framework = req.body.framework;
+    if (req.body.contractType !== undefined) payload.contract_type = req.body.contractType;
+    if (req.body.files !== undefined) payload.files = req.body.files;
+    if (req.body.activeFilePath !== undefined) payload.active_file_path = req.body.activeFilePath;
+    if (req.body.audit !== undefined) payload.audit = req.body.audit;
+    if (req.body.versions !== undefined) payload.versions = req.body.versions;
+    if (req.body.deployments !== undefined) payload.deployments = req.body.deployments;
+
+    const { data, error } = await supabaseAdmin.from("projects").update(payload).eq("id", req.params.id).eq("user_id", userId).select("*").maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ success: false, error: "Project not found or access denied." });
+    return res.json(mapProjectRow(data));
+  } catch (error: any) {
+    console.error("[PROJECTS] Update persistence failed:", redactSecrets(error));
+    return res.status(Number(error?.statusCode) || 503).json({ success: false, code: error?.code || "PROJECT_PERSISTENCE_FAILED", error: safeErrorMessage(error) });
   }
-
-  db.projects[index] = {
-    ...db.projects[index],
-    ...req.body,
-    id: db.projects[index].id,
-    userId: db.projects[index].userId, // Enforce userId doesn't change
-    createdAt: db.projects[index].createdAt
-  };
-
-  writeDb(db);
-  res.json(db.projects[index]);
 });
 
-// DELETE project (Cascading delete - deletes versions, deployments, audit, and metadata, User Isolated)
-app.delete("/api/projects/:id", (req, res) => {
-  const db = readDb();
-  const userId = req.headers["x-user-id"] as string || "default";
-  const index = db.projects.findIndex((p: any) => p.id === req.params.id && (p.userId || "default") === userId);
-  if (index === -1) {
-    return res.status(404).json({ error: "Project not found or access denied" });
+// DELETE project. Only the owner may delete a project. Foreign-key cascades
+// remove associated audits/deployments.
+apiRouter.delete("/projects/:id", async (req, res) => {
+  const userId = getReqUserId(req);
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    const { data, error } = await supabaseAdmin.from("projects").delete().eq("id", req.params.id).eq("user_id", userId).select("id").maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ success: false, error: "Project not found or access denied." });
+    return res.json({ success: true, message: "Workspace deleted permanently from Supabase." });
+  } catch (error: any) {
+    console.error("[PROJECTS] Delete persistence failed:", redactSecrets(error));
+    return res.status(Number(error?.statusCode) || 503).json({ success: false, code: error?.code || "PROJECT_PERSISTENCE_FAILED", error: safeErrorMessage(error) });
   }
-
-  // Cascading delete is implicitly done because versions, deployments, audit,
-  // and metadata are nested inside the deleted project record in db.json!
-  db.projects.splice(index, 1);
-  writeDb(db);
-  res.json({ success: true, message: "Workspace and all associated versions, audit reports, history and metadata deleted permanently." });
 });
 
 // Centralized API Error Normalizer Helper
 function sendStructuredError(res: express.Response, err: any, providerName = "groq", modelName = "platform-router") {
-  console.error("[SERVER ERROR]", err);
+  console.error("[SERVER ERROR]", redactSecrets(err));
   let statusCode = 500;
   let code = "API_ERROR";
   let message = "An error occurred during AI processing.";
@@ -266,7 +381,7 @@ function sendStructuredError(res: express.Response, err: any, providerName = "gr
       message = rawMsg;
     }
   } catch {
-    message = err.message || String(err);
+    message = safeErrorMessage(err);
   }
 
   if (statusCode === 429 && code !== "RATE_LIMIT_ERROR") {
@@ -292,7 +407,7 @@ function sendStructuredError(res: express.Response, err: any, providerName = "gr
 }
 
 // Development / Test path simulating HTTP 429 Rate Limit
-app.get("/api/test-429", (req, res) => {
+apiRouter.get("/test-429", (req, res) => {
   return res.status(429).json({
     success: false,
     error: {
@@ -312,7 +427,7 @@ app.get("/api/test-429", (req, res) => {
 });
 
 // POST /api/generate-plan
-app.post("/api/generate-plan", async (req, res) => {
+apiRouter.post("/generate-plan", async (req, res) => {
   try {
     const { prompt, blockchain, language, framework, contractType } = req.body;
     if (!prompt) {
@@ -371,7 +486,7 @@ Do NOT output markdown wrappers, chat explanations, or conversational filler. Re
 // -------------------------------------------------------------
 
 // POST /api/generate
-app.post("/api/generate", async (req, res) => {
+apiRouter.post("/generate", async (req, res) => {
   try {
     const userConfig = getActiveUserConfig(req);
     const { prompt, blockchain, language, framework, contractType, plan, systemInstruction, targetPath, maxTokens, routeAttempt } = req.body;
@@ -539,7 +654,7 @@ Do NOT output markdown wrappers. Return raw, parsing-valid JSON.
 });
 
 // POST /api/edit
-app.post("/api/edit", async (req, res) => {
+apiRouter.post("/edit", async (req, res) => {
   const userConfig = getActiveUserConfig(req);
   const { projectId, instruction, files } = req.body;
 
@@ -620,7 +735,7 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 });
 
 // POST /api/remediate
-app.post("/api/remediate", async (req, res) => {
+apiRouter.post("/remediate", async (req, res) => {
   const userConfig = getActiveUserConfig(req);
   const { projectId, vulnerability, files } = req.body;
 
@@ -944,7 +1059,7 @@ function validateAndSanitizeVulnerabilities(vulnerabilities: any[], files?: any[
 }
 
 // POST /api/audit
-app.post("/api/audit", async (req, res) => {
+apiRouter.post("/audit", async (req, res) => {
   try {
     const userConfig = getActiveUserConfig(req);
     const { files, modifiedFiles, previousAudit } = req.body;
@@ -1089,7 +1204,7 @@ Do NOT output any conversational text or markdown wrappers like \`\`\`json. Retu
 });
 
 // POST /api/compile
-app.post("/api/compile", async (req, res) => {
+apiRouter.post("/compile", async (req, res) => {
   const { blockchain, framework, files } = req.body;
   if (!files || files.length === 0) {
     return res.status(400).json({ error: "No files found to compile" });
@@ -1109,69 +1224,87 @@ app.post("/api/compile", async (req, res) => {
       timestamp: result.timestamp
     });
   } catch (err: any) {
-    console.error("[COMPILER ENGINE] Execution failed:", err);
+    console.error("[COMPILER ENGINE] Execution failed:", redactSecrets(err));
     return res.status(500).json({
       success: false,
-      error: err.message || String(err),
-      stack: err.stack || "No stack trace available"
+      error: safeErrorMessage(err),
+      ...(process.env.NODE_ENV !== "production" ? { stack: err.stack || "No stack trace available" } : {})
     });
   }
 });
 
 // POST /api/deploy
-app.post("/api/deploy", (req, res) => {
-  const { projectId, network, contractName, files } = req.body;
-
+apiRouter.post("/deploy", async (req, res) => {
+  const { projectId, network, contractName } = req.body;
   if (!network || !contractName) {
     return res.status(400).json({ error: "Network and Contract Name are required for deployment" });
   }
 
-  console.log(`Deploying ${contractName} to network ${network}...`);
-
-  const txHash = "0x" + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
-  const address = "0x" + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
-  const gasUsed = (Math.floor(Math.random() * 800000) + 120000).toLocaleString();
-
-  const logs = [
-    `[DEPLOYER] Initializing wallet provider...`,
-    `[DEPLOYER] Loading deployment script...`,
-    `[DEPLOYER] Preparing gas configuration for ${network}...`,
-    `[DEPLOYER] Current estimated gas price: ${Math.floor(Math.random() * 40) + 10} Gwei`,
-    `[DEPLOYER] Sending transaction to deploy ${contractName}...`,
-    `[DEPLOYER] Transaction broadcasted. TxHash: ${txHash}`,
-    `[DEPLOYER] Waiting for block confirmation...`,
-    `[DEPLOYER] Transaction confirmed in block #${Math.floor(Math.random() * 100000) + 15000000}!`,
-    `[DEPLOYER] Contract ${contractName} successfully deployed to: ${address}`,
-    `[DEPLOYER] Verified contract source on Block Explorer successfully.`
-  ];
-
-  const deploymentRecord = {
-    id: `dep-${Date.now()}`,
-    timestamp: new Date().toISOString(),
-    network,
-    contractName,
-    address,
-    txHash,
-    gasUsed,
-    status: "success",
-    logs
-  };
-
-  // Persist this deployment in project if projectId is supplied
-  if (projectId) {
-    const db = readDb();
-    const index = db.projects.findIndex((p: any) => p.id === projectId);
-    if (index !== -1) {
-      if (!db.projects[index].deployments) db.projects[index].deployments = [];
-      db.projects[index].deployments.unshift(deploymentRecord);
-      writeDb(db);
+  const ownerId = getReqUserId(req);
+  let project: any = null;
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    if (projectId) {
+      const { data, error } = await supabaseAdmin.from("projects").select("*").eq("id", projectId).eq("user_id", ownerId).maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: "Project not found or access denied" });
+      project = data;
     }
-  }
 
-  res.json({
-    success: true,
-    deployment: deploymentRecord
-  });
+    console.log(`Deploying ${contractName} to network ${network}...`);
+    const txHash = "0x" + crypto.randomBytes(32).toString("hex");
+    const address = "0x" + crypto.randomBytes(20).toString("hex");
+    const gasUsed = (Math.floor(Math.random() * 800000) + 120000).toLocaleString();
+    const logs = [
+      `[DEPLOYER] Initializing wallet provider...`,
+      `[DEPLOYER] Loading deployment script...`,
+      `[DEPLOYER] Preparing gas configuration for ${network}...`,
+      `[DEPLOYER] Sending transaction to deploy ${contractName}...`,
+      `[DEPLOYER] Transaction broadcasted. TxHash: ${txHash}`,
+      `[DEPLOYER] Transaction confirmed.`,
+      `[DEPLOYER] Contract ${contractName} successfully deployed to: ${address}`,
+    ];
+    const deploymentRecord = {
+      id: `dep-${crypto.randomUUID()}`,
+      timestamp: new Date().toISOString(),
+      network,
+      contractName,
+      address,
+      txHash,
+      gasUsed,
+      status: "success",
+      logs,
+    };
+
+    if (projectId && project) {
+      const currentDeployments = Array.isArray(project.deployments) ? project.deployments : [];
+      const { error: deploymentError } = await supabaseAdmin.from("deployments").insert({
+        id: deploymentRecord.id,
+        project_id: projectId,
+        user_id: ownerId,
+        network,
+        contract_name: contractName,
+        contract_address: address,
+        transaction_hash: txHash,
+        gas_used: gasUsed,
+        status: "success",
+        logs,
+        created_at: deploymentRecord.timestamp,
+      });
+      if (deploymentError) throw deploymentError;
+
+      const { error: projectUpdateError } = await supabaseAdmin.from("projects").update({
+        deployments: [deploymentRecord, ...currentDeployments],
+        updated_at: new Date().toISOString(),
+      }).eq("id", projectId).eq("user_id", ownerId);
+      if (projectUpdateError) throw projectUpdateError;
+    }
+
+    return res.json({ success: true, deployment: deploymentRecord });
+  } catch (error: any) {
+    console.error("[DEPLOYER] Persistence failure:", redactSecrets(error));
+    return res.status(Number(error?.statusCode) || 503).json({ success: false, code: error?.code || "DEPLOYMENT_PERSISTENCE_FAILED", error: safeErrorMessage(error) });
+  }
 });
 
 
@@ -1179,105 +1312,229 @@ app.post("/api/deploy", (req, res) => {
 // ADMINISTRATOR PORTAL ENDPOINTS
 // -------------------------------------------------------------
 
-// Admin Role protection is based on a verified Firebase ID token, never client-spoofable headers.
+// Admin Role protection is based on a verified Supabase JWT token, never client-spoofable headers.
 const checkAdmin = requireAdminUser;
 
-// Admin stats
-app.get("/api/admin/stats", checkAdmin, (req, res) => {
-  const db = readDb();
-  const allConfigs = SettingsService.getAllConfigs();
-  const usersList = Object.values(allConfigs);
+function isMissingTableError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || "");
+  const msg = String(err.message || err || "");
+  return (
+    code === "PGRST205" ||
+    code === "42P01" ||
+    /relation.*does not exist|table.*not found|schema cache/i.test(msg)
+  );
+}
 
-  const totalUsers = usersList.length;
-  const totalProjects = db.projects.length;
+// Admin stats. All values come from Supabase; no local-file fallback is used.
+apiRouter.get("/admin/stats", checkAdmin, async (_req, res) => {
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    const [{ data: profiles, error: usersError }, { data: rawProjects, error: projectsError }] = await Promise.all([
+      supabaseAdmin.from("profiles").select("*"),
+      supabaseAdmin.from("projects").select("id, user_id, blockchain, audit, created_at"),
+    ]);
+    if (usersError) throw usersError;
+    if (projectsError && !isMissingTableError(projectsError)) throw projectsError;
 
-  let sumScore = 0;
-  let scoreCount = 0;
-  const blockchainCounts: Record<string, number> = {};
-
-  db.projects.forEach((p: any) => {
-    if (p.audit?.score !== undefined) {
-      sumScore += p.audit.score;
-      scoreCount++;
+    const projects = projectsError ? [] : (rawProjects || []);
+    let sumScore = 0;
+    let scoreCount = 0;
+    const blockchainCounts: Record<string, number> = {};
+    for (const p of projects) {
+      if (typeof p.audit?.score === "number") { sumScore += p.audit.score; scoreCount++; }
+      const chain = p.blockchain || "Unknown";
+      blockchainCounts[chain] = (blockchainCounts[chain] || 0) + 1;
     }
-    const chain = p.blockchain || "Unknown";
-    blockchainCounts[chain] = (blockchainCounts[chain] || 0) + 1;
+    return res.json({
+      totalUsers: (profiles || []).length,
+      totalProjects: projects.length,
+      avgAuditScore: scoreCount ? Math.round(sumScore / scoreCount) : 0,
+      blockchainCounts,
+    });
+  } catch (error: any) {
+    return res.status(Number(error?.statusCode) || 503).json({ success: false, code: error?.code || "ADMIN_STORAGE_UNAVAILABLE", error: safeErrorMessage(error) });
+  }
+});
+
+// Admin list users. Profiles are the authoritative application-user index.
+apiRouter.get("/admin/users", checkAdmin, async (_req, res) => {
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    const { data, error } = await supabaseAdmin.from("profiles").select("*").order("created_at", { ascending: true });
+    if (error) throw error;
+    return res.json((data || []).map((p: any) => ({
+      userId: p.id,
+      uid: p.id,
+      id: p.id,
+      fullName: p.full_name || p.email?.split("@")[0] || "User",
+      displayName: p.full_name || p.email?.split("@")[0] || "User",
+      email: p.email || "",
+      role: p.role || "user",
+      isActive: p.is_active ?? true,
+      createdAt: p.created_at,
+      lastLogin: p.last_login,
+    })));
+  } catch (error: any) {
+    return res.status(Number(error?.statusCode) || 503).json({ success: false, code: error?.code || "ADMIN_STORAGE_UNAVAILABLE", error: safeErrorMessage(error) });
+  }
+});
+
+// Admin list projects with owner identity attached. This is the authoritative
+// view used to answer "which user created which smart contract".
+apiRouter.get("/admin/projects", checkAdmin, async (_req, res) => {
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    const [{ data: rawProjects, error: projectError }, { data: profiles, error: profileError }] = await Promise.all([
+      supabaseAdmin.from("projects").select("*").order("created_at", { ascending: false }),
+      supabaseAdmin.from("profiles").select("*"),
+    ]);
+    if (projectError && !isMissingTableError(projectError)) throw projectError;
+    if (profileError) throw profileError;
+
+    const projects = projectError ? [] : (rawProjects || []);
+    const owners = new Map((profiles || []).map((p: any) => [p.id, p]));
+    return res.json(projects.map((p: any) => mapProjectRow(p, owners.get(p.user_id))));
+  } catch (error: any) {
+    return res.status(Number(error?.statusCode) || 503).json({ success: false, code: error?.code || "ADMIN_STORAGE_UNAVAILABLE", error: safeErrorMessage(error) });
+  }
+});
+
+// Admin toggle user status.
+apiRouter.put("/admin/users/:userId/toggle-status", checkAdmin, async (req, res) => {
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    const { data: current, error: readError } = await supabaseAdmin.from("profiles").select("*").eq("id", req.params.userId).maybeSingle();
+    if (readError) throw readError;
+    if (!current) return res.status(404).json({ success: false, error: "User profile not found." });
+    const { data, error } = await supabaseAdmin.from("profiles").update({ is_active: !(current.is_active ?? true), updated_at: new Date().toISOString() }).eq("id", req.params.userId).select("*").single();
+    if (error) throw error;
+    return res.json({ userId: data.id, isActive: data.is_active, role: data.role, email: data.email, fullName: data.full_name });
+  } catch (error: any) {
+    return res.status(Number(error?.statusCode) || 503).json({ success: false, code: error?.code || "ADMIN_UPDATE_FAILED", error: safeErrorMessage(error) });
+  }
+});
+
+// Admin update user role.
+apiRouter.put("/admin/users/:userId/role", checkAdmin, async (req, res) => {
+  const role = String(req.body?.role || "");
+  if (role !== "admin" && role !== "user") return res.status(400).json({ success: false, error: "Invalid role specified." });
+  if (req.params.userId === String((req as any).user?.id) && role !== "admin") {
+    return res.status(400).json({ success: false, error: "The current administrator cannot remove their own administrator role." });
+  }
+  try {
+    const supabaseAdmin = requireSupabaseProjectStore();
+    const { data, error } = await supabaseAdmin.from("profiles").update({ role, updated_at: new Date().toISOString() }).eq("id", req.params.userId).select("*").maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ success: false, error: "User profile not found." });
+    return res.json({ userId: data.id, role: data.role, isActive: data.is_active, email: data.email, fullName: data.full_name });
+  } catch (error: any) {
+    return res.status(Number(error?.statusCode) || 503).json({ success: false, code: error?.code || "ADMIN_UPDATE_FAILED", error: safeErrorMessage(error) });
+  }
+});
+
+// Definitive API 404 handler for any unmapped /api route
+apiRouter.use((req, res) => {
+  return res.status(404).json({
+    success: false,
+    error: {
+      code: "API_ROUTE_NOT_FOUND",
+      message: `API route not found: ${req.method} ${req.originalUrl || req.path}`
+    }
   });
+});
 
-  const avgAuditScore = scoreCount > 0 ? Math.round(sumScore / scoreCount) : 0;
-
-  res.json({
-    totalUsers,
-    totalProjects,
-    avgAuditScore,
-    blockchainCounts
+// Definitive API Error Handler
+apiRouter.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("[API UNCAUGHT ERROR]", redactSecrets(err));
+  const statusCode = Number(err.status || err.statusCode) || 500;
+  return res.status(statusCode).json({
+    success: false,
+    error: {
+      code: err.code || "INTERNAL_SERVER_ERROR",
+      message: safeErrorMessage(err)
+    }
   });
 });
 
-// Admin list users
-app.get("/api/admin/users", checkAdmin, (req, res) => {
-  const allConfigs = SettingsService.getAllConfigs();
-  res.json(Object.values(allConfigs));
+// Mount the self-contained API Router at /api.
+// This guarantees that ANY request starting with /api is handled ENTIRELY inside
+// apiRouter and CANNOT fall through to Vite or SPA index.html fallback under any condition.
+app.use("/api", apiRouter);
+
+// Final API boundary safety net. This is intentionally outside apiRouter so a future
+// route-registration mistake cannot make an /api request fall through to the SPA.
+// API clients will always receive JSON, never index.html.
+app.use("/api", (req, res) => {
+  return res.status(404).json({
+    success: false,
+    code: "API_ROUTE_NOT_FOUND",
+    error: {
+      code: "API_ROUTE_NOT_FOUND",
+      message: `API route not found: ${req.method} ${req.originalUrl || req.path}`
+    }
+  });
 });
-
-// Admin list projects
-app.get("/api/admin/projects", checkAdmin, (req, res) => {
-  const db = readDb();
-  res.json(db.projects);
-});
-
-// Admin toggle user status (block/unblock)
-app.put("/api/admin/users/:userId/toggle-status", checkAdmin, (req, res) => {
-  const { userId } = req.params;
-  const current = SettingsService.get(userId);
-  if (!current) {
-    // Let's bootstrap user if they don't exist yet in config but exist in request
-    const mockEmail = (req as any).firebaseUser?.email || "unknown@ai-contracts.com";
-    const initialized = SettingsService.save(userId, { email: mockEmail, isActive: true });
-    const toggled = SettingsService.updateRoleAndStatus(userId, { isActive: false });
-    return res.json(toggled);
-  }
-
-  const updatedActive = current.isActive === false ? true : false;
-  const updated = SettingsService.updateRoleAndStatus(userId, { isActive: updatedActive });
-  res.json(updated);
-});
-
-// Admin update user role
-app.put("/api/admin/users/:userId/role", checkAdmin, (req, res) => {
-  const { userId } = req.params;
-  const { role } = req.body;
-  if (!role || (role !== "admin" && role !== "user")) {
-    return res.status(400).json({ error: "Invalid role specified" });
-  }
-
-  const current = SettingsService.get(userId);
-  if (!current) {
-    // Bootstrap
-    const mockEmail = (req as any).firebaseUser?.email || "unknown@ai-contracts.com";
-    SettingsService.save(userId, { email: mockEmail });
-  }
-
-  const updated = SettingsService.updateRoleAndStatus(userId, { role });
-  res.json(updated);
-});
-
 
 // Global Express Error-handling Middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error("[UNCAUGHT EXPRESS EXCEPTION]", err);
+  console.error("[UNCAUGHT EXPRESS EXCEPTION]", redactSecrets(err));
   res.status(500).json({
     success: false,
-    error: err.message || String(err),
-    stack: err.stack || "No stack trace available"
+    error: safeErrorMessage(err),
+    ...(process.env.NODE_ENV !== "production" ? { stack: err.stack || "No stack trace available" } : {})
   });
 });
 
+
+async function bootstrapAdminUser() {
+  const adminEmail = "sarveshtiwarisarvesh@gmail.com";
+  if (!isSupabaseAdminConfigured()) {
+    console.warn("[BOOTSTRAP] Supabase is not configured; administrator bootstrap skipped.");
+    return;
+  }
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+    const { data: existing, error } = await supabaseAdmin
+      .from("profiles")
+      .select("id, email, role, is_active")
+      .eq("email", adminEmail)
+      .maybeSingle();
+    if (error) {
+      if (error.code === "PGRST205" || error.code === "42P01" || /relation.*does not exist|table.*not found|schema cache/i.test(error.message || "")) {
+        console.log("[BOOTSTRAP] 'profiles' table not created in Supabase yet. Database migrations will create it upon deployment.");
+        return;
+      }
+      throw error;
+    }
+    if (!existing) {
+      console.log(`[BOOTSTRAP] No profile exists for ${adminEmail} yet. User will be initialized upon registration.`);
+      return;
+    }
+    if (existing.role !== "admin" || existing.is_active !== true) {
+      const { error: updateError } = await supabaseAdmin
+        .from("profiles")
+        .update({ role: "admin", is_active: true, updated_at: new Date().toISOString() })
+        .eq("id", existing.id);
+      if (updateError) throw updateError;
+    }
+    console.log(`[BOOTSTRAP] Primary administrator verified in Supabase for ${adminEmail}`);
+  } catch (err: any) {
+    if (/relation.*does not exist|table.*not found|schema cache/i.test(err?.message || "")) {
+      console.log("[BOOTSTRAP] 'profiles' table not created in Supabase yet. Database migrations will create it upon deployment.");
+    } else {
+      console.warn("[BOOTSTRAP] Supabase administrator verification note:", safeErrorMessage(err));
+    }
+  }
+}
 
 // -------------------------------------------------------------
 // VITE DEV SERVER / MIDDLEWARE OR PROD STATIC SERVER
 // -------------------------------------------------------------
 async function startServer() {
+  await bootstrapAdminUser();
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1292,8 +1549,9 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`[SERVER] AI Contracts server listening on ${HOST}:${PORT}`);
+    console.log(`[SERVER] API boundary active at /api/*; SPA fallback is registered only after the API boundary.`);
   });
 }
 

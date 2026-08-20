@@ -1,20 +1,21 @@
-import { Router, Request, Response, NextFunction } from "express";
-import { requireAuthenticatedUser } from "../services/FirebaseAdminAuth";
+import { Router, Request, Response } from "express";
+import { requireAuthenticatedUser } from "../services/SupabaseAdminAuth";
 import { AI_TEMPERATURE, GLOBAL_MAX_OUTPUT_TOKENS, getPublicPolicy } from "../config/aiPolicy";
 
 const router = Router();
 
 export interface AuthenticatedRequest extends Request {
-  firebaseUser?: any;
+  user?: any;
+  supabaseUser?: any;
 }
 
 /** User settings are now informational. AI credentials/models are platform managed. */
 router.get("/", requireAuthenticatedUser, (req: AuthenticatedRequest, res: Response) => {
-  const u = req.firebaseUser;
+  const u = req.user || req.supabaseUser;
   res.json({
-    userId: u.uid,
-    email: u.email || "",
-    displayName: u.name || "",
+    userId: u?.id || u?.uid || "",
+    email: u?.email || "",
+    displayName: u?.name || u?.email?.split("@")[0] || "",
     provider: "groq",
     apiKey: "",
     defaultModel: "Intelligent Router",

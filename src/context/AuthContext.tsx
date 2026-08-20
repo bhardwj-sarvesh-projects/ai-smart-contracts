@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
-import { onAuthStateChanged } from 'firebase/auth';
-import { auth, isFirebaseConfigured } from '../firebase/firebase';
-import { AuthService, UserProfile } from '../firebase/authService';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { AuthService, UserProfile } from '../lib/authService';
 import { AppCache } from '../lib/cache';
 
 interface AuthContextType {
@@ -36,7 +35,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   useEffect(() => {
-    if (!isFirebaseConfigured || !auth) {
+    if (!isSupabaseConfigured) {
       const offlineUserStr = localStorage.getItem('offline_user');
       if (offlineUserStr) {
         try {
@@ -55,21 +54,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Maximum timeout guard so auth initialization never blocks the UI indefinitely
     const authTimeoutGuard = setTimeout(() => {
-      console.warn('[AUTH_CONTEXT] Auth state listener initialization timeout reached. Force-releasing loading state.');
+      console.warn('[AUTH_CONTEXT] Supabase auth state listener initialization timeout reached. Force-releasing loading state.');
       setLoading(false);
     }, 2500);
 
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    // 1. Initial check for existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        const uid = session.user.id;
+        const cachedUser = AppCache.get<UserProfile>('session_user');
+        if (cachedUser && cachedUser.uid === uid) {
+          setUser(cachedUser);
+          setLoading(false);
+        }
+
+        AuthService.getUserProfile(uid).then((freshProfile) => {
+          if (freshProfile) {
+            setUser(freshProfile);
+            AppCache.set('session_user', freshProfile, 3600000);
+          }
+          setLoading(false);
+        }).catch(() => {
+          setLoading(false);
+        });
+      } else {
+        setLoading(false);
+      }
+    }).catch(() => {
+      setLoading(false);
+    });
+
+    // 2. Listen to active auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       clearTimeout(authTimeoutGuard);
-      if (firebaseUser) {
+      if (session?.user) {
+        const uid = session.user.id;
         try {
-          // Check cached user first before firestore read to prevent duplicate profile queries
           const cachedUser = AppCache.get<UserProfile>('session_user');
-          if (cachedUser && cachedUser.uid === firebaseUser.uid) {
+          if (cachedUser && cachedUser.uid === uid) {
             setUser(cachedUser);
             setLoading(false);
-            // Non-blocking background sync if needed
-            AuthService.getUserProfile(firebaseUser.uid).then(freshProfile => {
+            AuthService.getUserProfile(uid).then((freshProfile) => {
               if (freshProfile) {
                 setUser(freshProfile);
                 AppCache.set('session_user', freshProfile, 3600000);
@@ -78,35 +103,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             return;
           }
 
-          const profile = await AuthService.getUserProfile(firebaseUser.uid);
+          const profile = await AuthService.getUserProfile(uid);
           const activeProfile = profile || {
-            uid: firebaseUser.uid,
-            fullName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-            email: firebaseUser.email || '',
-            role: 'user',
+            uid: session.user.id,
+            fullName: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'User',
+            email: session.user.email || '',
+            role: session.user.email?.trim().toLowerCase() === 'sarveshtiwarisarvesh@gmail.com' ? 'admin' : 'user',
             isActive: true,
-            createdAt: new Date().toISOString(),
+            createdAt: session.user.created_at || new Date().toISOString(),
             lastLogin: new Date().toISOString(),
-            photoURL: firebaseUser.photoURL || '',
+            photoURL: session.user.user_metadata?.avatar_url || '',
             preferences: {},
-            aiSettings: {}
+            aiSettings: {},
           };
-          
+
           setUser(activeProfile);
           AppCache.set('session_user', activeProfile, 3600000);
         } catch (error) {
           console.error('[AUTH_CONTEXT] Error fetching user profile:', error);
           const fallbackProfile: UserProfile = {
-            uid: firebaseUser.uid,
-            fullName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-            email: firebaseUser.email || '',
+            uid: session.user.id,
+            fullName: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'User',
+            email: session.user.email || '',
             role: 'user',
             isActive: true,
             createdAt: new Date().toISOString(),
             lastLogin: new Date().toISOString(),
-            photoURL: firebaseUser.photoURL || '',
+            photoURL: '',
             preferences: {},
-            aiSettings: {}
+            aiSettings: {},
           };
           setUser(fallbackProfile);
           AppCache.set('session_user', fallbackProfile, 3600000);
@@ -120,7 +145,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       clearTimeout(authTimeoutGuard);
-      unsubscribe();
+      subscription.unsubscribe();
     };
   }, []);
 
@@ -192,4 +217,3 @@ export function useAuth() {
   }
   return context;
 }
-

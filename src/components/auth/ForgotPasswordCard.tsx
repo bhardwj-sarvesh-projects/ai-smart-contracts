@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Mail, Cpu, ArrowLeft, CheckCircle2, ArrowRight, HelpCircle, ShieldAlert } from 'lucide-react';
-import { AuthService } from '../../firebase/authService';
+import { AuthService } from '../../lib/authService';
 
 interface ForgotPasswordCardProps {
   onNavigate: (view: 'login') => void;

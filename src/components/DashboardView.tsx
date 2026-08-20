@@ -503,7 +503,7 @@ export default function DashboardView({
                   </ul>
                 </div>
                 <p className="text-[10px] text-slate-400 leading-none italic">
-                  Note: This operation is permanent, syncs with Firestore, and cannot be undone.
+                  Note: This operation is permanent, syncs with Supabase, and cannot be undone.
                 </p>
               </div>
 

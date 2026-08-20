@@ -1,215 +1,199 @@
 import OpenAI from "openai";
 import { AIProvider, AIResponse, HealthResponse, RequestOptions } from "./AIProvider";
+import { AI_TEMPERATURE, AI_DEFAULT_MAX_OUTPUT_TOKENS, GROQ_BASE_URL } from "../config/aiPolicy";
 import { TokenBudgetEngine } from "../../src/core/EngineeringCore/runtime/TokenBudgetEngine";
+import { safeErrorMessage } from "../utils/secretRedaction";
 
 export class GroqProvider implements AIProvider {
   readonly name = "groq";
-  private client: OpenAI;
-  private model: string;
-  private temperature: number;
-  private maxTokens: number;
+  private readonly client: OpenAI;
+  private readonly model: string;
+  private readonly maxTokens: number;
 
   constructor(config: { apiKey: string; model?: string; temperature?: number; maxTokens?: number }) {
     this.client = new OpenAI({
       apiKey: config.apiKey,
-      baseURL: "https://api.groq.com/openai/v1",
-      timeout: 60000,
+      baseURL: GROQ_BASE_URL,
+      timeout: 90_000,
+      maxRetries: 0,
     });
-    this.model = config.model || "openai/gpt-oss-20b";
-    this.temperature = 0.1;
-    this.maxTokens = 65536;
-    console.log(`[GROQ PROVIDER] Initialized dynamically with model: ${this.model}`);
+    this.model = config.model || "openai/gpt-oss-120b";
+    this.maxTokens = Math.min(
+      config.maxTokens || AI_DEFAULT_MAX_OUTPUT_TOKENS,
+      AI_DEFAULT_MAX_OUTPUT_TOKENS,
+    );
   }
 
-  private async executeWithRetry(
+  private async execute(
     prompt: string,
-    systemInstruction: string = "",
-    responseMimeType: string = "text/plain",
-    route: string = "unknown",
-    retries: number = 2,
-    baseDelayMs: number = 500,
-    options?: RequestOptions
+    systemInstruction = "",
+    responseMimeType = "text/plain",
+    options?: RequestOptions,
   ): Promise<AIResponse> {
-    const startTime = Date.now();
-    let lastError: any = null;
-
-    let sys = systemInstruction || "";
-    if (responseMimeType === "application/json" && !sys.toLowerCase().includes("json") && !prompt.toLowerCase().includes("json")) {
-      sys = sys ? `${sys}\nYou MUST respond with valid JSON.` : "You MUST respond with valid JSON.";
+    let system = systemInstruction || "";
+    if (responseMimeType === "application/json" && !/json/i.test(system)) {
+      system = `${system}\nReturn only valid JSON. Do not use markdown fences.`.trim();
     }
 
     const targetPath = options?.targetPath;
-    const fileLimit = targetPath ? TokenBudgetEngine.getFileTypeMaxTokens(targetPath) : 2000;
-    const requestedTokens = typeof options?.maxTokens === 'number' ? options.maxTokens : this.maxTokens;
-    let finalMaxTokens = Math.min(requestedTokens, fileLimit);
-
-    if (targetPath) {
-      TokenBudgetEngine.assertTokenBudget(targetPath, finalMaxTokens);
-    }
-
-    const tpmCheck = TokenBudgetEngine.checkAndClampTPMBudget(
-      "groq",
-      targetPath || '',
-      finalMaxTokens,
-      prompt.length + sys.length
+    const promptLength = system.length + prompt.length;
+    const requested = Math.min(
+      options?.maxTokens || this.maxTokens,
+      this.maxTokens,
+      AI_DEFAULT_MAX_OUTPUT_TOKENS,
     );
 
-    finalMaxTokens = tpmCheck.safeMaxTokens;
+    const budget = TokenBudgetEngine.getSafeRequestBudget(
+      "groq",
+      requested,
+      promptLength,
+      this.model,
+    );
 
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      try {
-        console.log("--------------------------------");
-        console.log("GROQ REQUEST");
-        console.log(`Model: ${this.model}`);
-        console.log(`Route: ${route}`);
-        console.log(`Target File: ${targetPath || "N/A"}`);
-        console.log(`Max Tokens: ${finalMaxTokens}`);
-        console.log(`Prompt Length: ${prompt.length + sys.length}`);
-        console.log("--------------------------------");
-
-        let response;
-        try {
-          response = await this.client.chat.completions.create({
-            model: this.model,
-            messages: [
-              ...(sys ? [{ role: "system" as const, content: sys }] : []),
-              { role: "user" as const, content: prompt }
-            ],
-            response_format: responseMimeType === "application/json" ? { type: "json_object" } : undefined,
-            temperature: this.temperature,
-            max_tokens: finalMaxTokens,
-          });
-        } catch (rfErr: any) {
-          // Fallback if response_format is rejected by specific model/endpoint
-          if (responseMimeType === "application/json" && (rfErr.status === 400 || (rfErr.message && rfErr.message.toLowerCase().includes("response_format")))) {
-            console.warn(`[GROQ PROVIDER] Model rejected response_format json_object. Retrying without response_format constraint...`);
-            response = await this.client.chat.completions.create({
-              model: this.model,
-              messages: [
-                ...(sys ? [{ role: "system" as const, content: sys }] : []),
-                { role: "user" as const, content: prompt }
-              ],
-              temperature: this.temperature,
-              max_tokens: finalMaxTokens,
-            });
-          } else {
-            throw rfErr;
-          }
-        }
-
-        const text = response.choices[0]?.message?.content || "";
-        const durationMs = Date.now() - startTime;
-
-        const promptTokens = response.usage?.prompt_tokens ?? 0;
-        const completionTokens = response.usage?.completion_tokens ?? 0;
-        const totalTokens = response.usage?.total_tokens ?? 0;
-
-        TokenBudgetEngine.updateTPMUsageSuccess("groq", totalTokens);
-
-        console.log(`Prompt Tokens: ${promptTokens}`);
-        console.log(`Completion Tokens: ${completionTokens}`);
-        console.log(`Total Tokens: ${totalTokens}`);
-        console.log(`Latency: ${durationMs}ms`);
-
-        return {
-          text,
-          model: this.model,
-          durationMs,
-          usage: response.usage ? {
-            promptTokens,
-            completionTokens,
-            totalTokens
-          } : undefined
-        };
-      } catch (err: any) {
-        lastError = err;
-
-        console.error("--------------------------------");
-        console.error("GROQ FAILURE DETAILS");
-        console.error("Full Groq error:", err);
-        console.error("HTTP status:", err.status || "N/A");
-        console.error("Error code:", err.code || "N/A");
-        console.error("--------------------------------");
-
-        const msg = (err.message || String(err)).toLowerCase();
-        const isRateLimit = err.status === 429 || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate exceeded") || msg.includes("rate_limit_exceeded") || msg.includes("too many requests") || msg.includes("tpd") || msg.includes("tpm") || msg.includes("rpm") || msg.includes("quota exceeded") || msg.includes("insufficient quota") || msg.includes("insufficient credits");
-        const isAuth = err.status === 401 || err.status === 403 || err.status === 402 || msg.includes("401") || msg.includes("403") || msg.includes("402") || msg.includes("invalid_api_key") || msg.includes("unauthorized");
-
-        if (isRateLimit || isAuth) {
-          if (isRateLimit) {
-            TokenBudgetEngine.updateTPMUsageFromError("groq", err.message || String(err));
-          }
-          const parsedRetryAfter = TokenBudgetEngine.extractRetryAfter(err.message || String(err), err.headers);
-          const code = isRateLimit ? "RATE_LIMIT_ERROR" : "AUTH_ERROR";
-          const status = err.status || (isRateLimit ? 429 : 401);
-          const structuredErr = new Error(JSON.stringify({
-            code,
-            errorCode: code,
-            stage: "AI Generation",
-            engine: "GroqProvider",
-            provider: "groq",
-            model: this.model,
-            statusCode: status,
-            message: err.message || String(err),
-            retryable: false,
-            retryAfter: parsedRetryAfter
-          }));
-          (structuredErr as any).isTerminal = true;
-          (structuredErr as any).code = code;
-          (structuredErr as any).status = status;
-          (structuredErr as any).isAuthError = isAuth;
-          throw structuredErr;
-        }
-
-        if (attempt < retries) {
-          const delay = baseDelayMs * Math.pow(2, attempt - 1);
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
-      }
+    if (budget.shouldCompact) {
+      const error: any = new Error(
+        "The request context is too large for the currently observed Groq provider budget.",
+      );
+      error.code = "PROVIDER_CONTEXT_BUDGET";
+      error.status = 413;
+      error.model = this.model;
+      throw error;
     }
 
-    throw lastError;
+    if (budget.shouldWait && budget.retryAfterMs > 0) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(budget.retryAfterMs + 250, 20_000)),
+      );
+    }
+
+    const finalMaxTokens = Math.min(
+      Math.max(256, budget.safeOutputTokens),
+      requested,
+      AI_DEFAULT_MAX_OUTPUT_TOKENS,
+    );
+
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+    if (system) messages.push({ role: "system", content: system });
+    messages.push({ role: "user", content: prompt });
+
+    const started = Date.now();
+
+    try {
+      const result: any = await (this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        temperature: AI_TEMPERATURE,
+        max_completion_tokens: finalMaxTokens,
+        response_format:
+          responseMimeType === "application/json"
+            ? { type: "json_object" }
+            : undefined,
+        ...(this.model.startsWith("openai/gpt-oss-")
+          ? { include_reasoning: false }
+          : {}),
+      } as any) as any).withResponse();
+
+      if (result.response?.headers) {
+        TokenBudgetEngine.updateFromHeaders("groq", result.response.headers, this.model);
+      }
+
+      const response = result.data;
+      const text = String(response.choices?.[0]?.message?.content || "").trim();
+
+      if (!text) {
+        throw new Error("The selected Groq model returned an empty response.");
+      }
+
+      if (responseMimeType === "application/json") {
+        JSON.parse(text.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim());
+      }
+
+      const promptTokens = response.usage?.prompt_tokens || 0;
+      const completionTokens = response.usage?.completion_tokens || 0;
+      const totalTokens = response.usage?.total_tokens || 0;
+
+      if (totalTokens) {
+        TokenBudgetEngine.updateTPMUsageSuccess("groq", totalTokens);
+      }
+
+      return {
+        text,
+        model: this.model,
+        durationMs: Date.now() - started,
+        usage: response.usage
+          ? { promptTokens, completionTokens, totalTokens }
+          : undefined,
+      };
+    } catch (error: any) {
+      TokenBudgetEngine.updateTPMUsageFromError("groq", safeErrorMessage(error));
+
+      const structured: any = new Error(
+        JSON.stringify({
+          code:
+            Number(error?.status) === 429
+              ? "TEMPORARY_TPM_RATE_LIMIT"
+              : Number(error?.status) === 404
+                ? "MODEL_UNAVAILABLE"
+                : Number(error?.status) === 401 || Number(error?.status) === 403
+                  ? "AUTH_ERROR"
+                  : "PROVIDER_ERROR",
+          provider: "groq",
+          model: this.model,
+          statusCode: Number(error?.status || 500),
+          message: safeErrorMessage(error),
+          retryAfterMs: TokenBudgetEngine.parseDurationToMs(
+            TokenBudgetEngine.extractRetryAfter(
+              safeErrorMessage(error),
+              error?.headers || error?.response?.headers,
+            ),
+          ),
+          retryable: Number(error?.status) >= 500,
+        }),
+      );
+
+      structured.status = Number(error?.status || 500);
+      structured.model = this.model;
+      throw structured;
+    }
   }
 
-  async generate(prompt: string, systemInstruction?: string, responseMimeType?: string, options?: RequestOptions): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, responseMimeType || "text/plain", "/api/generate", 2, 500, options);
+  async generate(prompt: string, systemInstruction?: string, responseMimeType?: string, options?: RequestOptions) {
+    return this.execute(prompt, systemInstruction, responseMimeType || "text/plain", options);
   }
 
-  async edit(prompt: string, systemInstruction?: string, options?: RequestOptions): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/edit", 2, 500, options);
+  async edit(prompt: string, systemInstruction?: string, options?: RequestOptions) {
+    return this.execute(prompt, systemInstruction, "application/json", options);
   }
 
-  async audit(prompt: string, systemInstruction?: string, options?: RequestOptions): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/audit", 2, 500, options);
+  async audit(prompt: string, systemInstruction?: string, options?: RequestOptions) {
+    return this.execute(prompt, systemInstruction, "application/json", options);
   }
 
-  async plan(prompt: string, systemInstruction?: string, options?: RequestOptions): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/generate-plan", 2, 500, options);
+  async plan(prompt: string, systemInstruction?: string, options?: RequestOptions) {
+    return this.execute(prompt, systemInstruction, "application/json", options);
   }
 
-  async compileAnalysis(prompt: string, systemInstruction?: string, options?: RequestOptions): Promise<AIResponse> {
-    return this.executeWithRetry(prompt, systemInstruction, "application/json", "/api/compile", 2, 500, options);
+  async compileAnalysis(prompt: string, systemInstruction?: string, options?: RequestOptions) {
+    return this.execute(prompt, systemInstruction, "application/json", options);
   }
 
   async healthCheck(): Promise<HealthResponse> {
-    const startTime = Date.now();
+    const started = Date.now();
     try {
-      await this.client.chat.completions.create({
-        model: this.model,
-        messages: [{ role: "user" as const, content: "ping" }],
-        max_tokens: 5
-      });
+      // models.list is used instead of a completion ping so health checks do not
+      // consume generation TPM.
+      await this.client.models.list();
       return {
         success: true,
-        latencyMs: Date.now() - startTime,
-        modelUsed: this.model
+        latencyMs: Date.now() - started,
+        modelUsed: this.model,
       };
-    } catch (err: any) {
+    } catch (error: any) {
       return {
         success: false,
-        latencyMs: Date.now() - startTime,
+        latencyMs: Date.now() - started,
         modelUsed: this.model,
-        error: err.message || "Failed to call Groq completions."
+        error: safeErrorMessage(error),
       };
     }
   }

@@ -1,44 +1,77 @@
-# AI Infrastructure Setup
+# AI Infrastructure Setup — Groq Key Pool
 
-## Fixed platform policy
+## Authoritative policy
 
-- AI provider: Groq Intelligent Router
-- Temperature: `0.1` (hardcoded)
-- Global output ceiling: `65536` tokens (hardcoded)
-- Users cannot supply API keys, provider, model, temperature, or token limit.
-- Administrators manage Groq credentials only.
-- Model-to-task assignments are hardcoded in `server/config/aiPolicy.ts`.
-
-## Required server configuration
-
-Set a strong `ENCRYPTION_SECRET` with at least 32 characters.
-
-For production Firebase Admin authentication and Firestore, use either:
-
-1. Application Default Credentials (recommended on Cloud Run), or
-2. `FIREBASE_SERVICE_ACCOUNT_JSON` containing the service-account JSON.
-
-Set `ADMIN_EMAILS` to the comma-separated administrator allowlist.
-
-## Credential storage
-
-The Admin Panel writes credentials to the Firestore collection `aiCredentials` when Firebase Admin/Firestore is available. A local encrypted JSON store under `data/ai_credentials.json` is used only as a development fallback.
-
-The raw Groq API key is never returned to the browser.
+- Provider: **Groq Cloud only**
+- Maximum platform keys: **15**
+- API key storage: **Supabase PostgreSQL + AES-256-GCM**
+- Model selection: **server-controlled and locked**
+- Admin model selection: **not available**
+- User model selection: **not available**
+- Local credential fallback: **disabled**
+- Global temperature: `0.1`
+- Global output ceiling: `65536` tokens, further constrained by the selected model
 
 ## Admin Panel
 
-Open **System Control Panel → AI Infrastructure** to:
+The Admin Panel collects only:
 
-- add a Groq credential
-- enable/disable a credential
-- test a credential
-- delete a credential
-- inspect masked key, health and usage statistics
-- inspect the locked model policy
+1. Credential display name
+2. Groq API key (`gsk_...`)
 
-Model assignments cannot be changed from the Admin Panel.
+The server automatically stores the credential as a Groq route. Provider, endpoint, and model are platform-managed.
 
-## Security note
+## Routing architecture
 
-Do not commit `.env`, service-account JSON, Groq API keys, OpenAI keys, or encryption secrets. If any credential was previously committed to a public repository, revoke/rotate it immediately.
+Every configured key participates in the same locked task policy. The router is key-first:
+
+`API #1 → best model → fallback model → fallback model → API #2 → ...`
+
+The router rotates the starting key, skips cooled-down keys, and immediately moves to another key after authentication/rate-limit failures.
+
+## Model policy
+
+Production-only Groq models are defined in `server/config/aiPolicy.ts`.
+
+- Architecture/generation/security/repository analysis: GPT-OSS 120B → Llama 3.3 70B → GPT-OSS 20B
+- Edit/repair: GPT-OSS 120B → GPT-OSS 20B → Llama 3.3 70B
+- Testing/copilot: GPT-OSS 20B → GPT-OSS 120B → Llama 3.3 70B
+- Documentation: Llama 3.3 70B → GPT-OSS 20B → GPT-OSS 120B
+- Research: Groq Compound → GPT-OSS 120B → Llama 3.3 70B
+
+Engineering controls this policy through code deployments. It is not an administrator setting.
+
+## Required server configuration
+
+- `SUPABASE_URL`
+- `SUPABASE_SECRET_KEY` (preferred current Supabase secret key) OR `SUPABASE_SERVICE_ROLE_KEY` (legacy)
+- `ENCRYPTION_SECRET` — 32+ random characters
+- `GROQ_MAX_CREDENTIALS=15`
+
+Browser:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+## Database
+
+Apply:
+
+`supabase/migrations/20260819000001_groq_key_pool_and_routing.sql`
+
+The migration also enforces the 15-key ceiling and prevents direct browser access to encrypted credentials through RLS.
+
+## Persistence guarantee
+
+Credential creation is not acknowledged as successful until PostgreSQL has accepted the encrypted row and the server has verified that row exists. List reads use a short-lived server cache for speed, while secret reads are performed directly from Supabase and decrypted only in memory for the active request.
+
+## Security
+
+Never commit or expose:
+
+- Groq API keys
+- `SUPABASE_SECRET_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `ENCRYPTION_SECRET`
+
+If a real secret is exposed, rotate it in the provider immediately.

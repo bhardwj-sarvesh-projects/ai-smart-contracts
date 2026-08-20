@@ -1,159 +1,144 @@
 import OpenAI from "openai";
-import { AIResponse, RequestOptions } from "../providers/AIProvider";
-import { AICredentialService, classifyAIError } from "./AICredentialService";
-import { AI_TEMPERATURE, AITask, GLOBAL_MAX_OUTPUT_TOKENS, AI_MODEL_POLICY, getModelPolicy } from "../config/aiPolicy";
+import {
+  AI_DEFAULT_MAX_OUTPUT_TOKENS,
+  AI_TEMPERATURE,
+  AITask,
+  GROQ_BASE_URL,
+  getEffectiveMaxOutputTokens,
+  getModelPolicy,
+  getRoutingGroupForTask,
+  ModelPolicyEntry,
+} from "../config/aiPolicy";
+import { AIResponse, HealthResponse, RequestOptions } from "../providers/AIProvider";
+import {
+  AICredentialService,
+  AICredential,
+  classifyAIError,
+} from "./AICredentialService";
+import { safeErrorMessage } from "../utils/secretRedaction";
+import { TokenBudgetEngine } from "../../src/core/EngineeringCore/runtime/TokenBudgetEngine";
 
 export interface OrchestratorRequest {
   task: AITask;
   prompt: string;
   systemInstruction?: string;
-  responseMimeType?: string;
+  responseMimeType?: "application/json" | "text/plain";
   options?: RequestOptions;
 }
 
 export interface OrchestratorResult extends AIResponse {
   credentialId: string;
   task: AITask;
+  provider: "groq";
 }
 
-export class AIOrchestrator {
-  private static buildSystem(systemInstruction: string | undefined, responseMimeType: string | undefined) {
-    let system = systemInstruction || "";
-    if (responseMimeType === "application/json" && !/valid\s+json/i.test(system)) {
-      system += `${system ? "\n" : ""}Return only valid JSON. Do not wrap the JSON in markdown.`;
-    }
-    system += `\nSYSTEM AI POLICY: Temperature is fixed at ${AI_TEMPERATURE}. Do not discuss or request changes to platform AI routing parameters.`;
-    return system.trim();
+let groupCursor = new Map<string, number>();
+const MODEL_UNAVAILABLE_TTL_MS = 10 * 60 * 1000;
+const unavailableModels = new Map<string, number>();
+let groqGlobalCooldownUntil = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function modelUnavailableKey(credentialId: string, model: string): string {
+  return `${credentialId}:${model}`;
+}
+
+function isModelTemporarilyUnavailable(credentialId: string, model: string): boolean {
+  const key = modelUnavailableKey(credentialId, model);
+  const expiresAt = unavailableModels.get(key) || 0;
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
+    unavailableModels.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function markModelUnavailable(credentialId: string, model: string): void {
+  unavailableModels.set(
+    modelUnavailableKey(credentialId, model),
+    Date.now() + MODEL_UNAVAILABLE_TTL_MS,
+  );
+}
+
+function buildSystem(systemInstruction?: string, responseMimeType?: string): string {
+  let system = String(systemInstruction || "").trim();
+
+  if (responseMimeType === "application/json" && !/json/i.test(system)) {
+    system += "\nReturn only valid JSON. Do not use markdown fences.";
   }
 
-  private static getRequestMaxTokens(model: string, requested?: number, targetPath?: string) {
-    const modelPolicy = Object.values(AI_MODEL_POLICY)
-      .flat()
-      .find((entry: any) => entry.model === model);
-    let max = modelPolicy?.maxOutputTokens || GLOBAL_MAX_OUTPUT_TOKENS;
-    if (requested && Number.isFinite(requested)) max = Math.min(max, Math.max(256, Math.floor(requested)));
-    if (targetPath) {
-      const lower = targetPath.toLowerCase();
-      if (lower.endsWith(".json")) max = Math.min(max, 16384);
-      if (lower.endsWith(".md")) max = Math.min(max, 16384);
-      if (lower.endsWith(".toml") || lower.endsWith(".yaml") || lower.endsWith(".yml")) max = Math.min(max, 8192);
-    }
-    return Math.max(256, max);
+  system += `\nPLATFORM AI POLICY: Provider, API credential, model selection, temperature, and token ceilings are controlled by AI Contracts. Temperature is fixed at ${AI_TEMPERATURE}.`;
+  return system.trim();
+}
+
+function rotateWithinGroup(credentials: AICredential[], groupId: string): AICredential[] {
+  if (credentials.length <= 1) return credentials;
+
+  const cursor = groupCursor.get(groupId) || 0;
+  const start = cursor % credentials.length;
+  groupCursor.set(groupId, (cursor + 1) % credentials.length);
+
+  return credentials.slice(start).concat(credentials.slice(0, start));
+}
+
+function isKeyTerminalFailure(failureType: string): boolean {
+  return (
+    failureType === "AUTH_ERROR" ||
+    failureType === "BILLING_SPEND_LIMIT" ||
+    failureType === "DAILY_QUOTA_EXCEEDED"
+  );
+}
+
+function isRateLimitFailure(failureType: string): boolean {
+  return failureType === "RATE_LIMIT_ERROR" || failureType === "TEMPORARY_TPM_RATE_LIMIT";
+}
+
+function modelFallbackAllowed(failureType: string): boolean {
+  return failureType === "MODEL_UNAVAILABLE";
+}
+
+function cooldownFor(failureType: string, error: any): number {
+  if (isRateLimitFailure(failureType)) {
+    const retryAfter = TokenBudgetEngine.extractRetryAfter(
+      safeErrorMessage(error),
+      error?.headers || error?.response?.headers,
+    );
+    const resetMs = TokenBudgetEngine.parseDurationToMs(retryAfter);
+    return Math.max(10_000, resetMs || 30_000);
   }
 
-  static async execute(request: OrchestratorRequest): Promise<OrchestratorResult> {
-    const credentials = await AICredentialService.getEnabled();
-    const routeAttempt = Math.max(1, Number(request.options?.routeAttempt || 1));
-    if (credentials.length === 0) {
-      throw AIOrchestrator.structuredError("NO_AI_CREDENTIALS", "No enabled Groq API credentials are configured in the Admin Panel.", 503, "", "");
-    }
-
-    const models = request.task === "research"
-      ? getModelPolicy("research")
-      : getModelPolicy(request.task);
-    const system = this.buildSystem(request.systemInstruction, request.responseMimeType);
-    let lastError: any = null;
-
-    // Credential-major traversal intentionally matches the platform policy:
-    // API-1 -> all approved models -> API-2 -> all approved models -> ...
-    const routePairs = credentials.flatMap(credential => models.map(modelEntry => ({ credential, modelEntry })));
-    const startIndex = Math.min(routePairs.length, routeAttempt > 1 ? (routeAttempt - 1) : 0);
-
-    for (const route of routePairs.slice(startIndex)) {
-      const credential = route.credential;
-      const modelEntry = route.modelEntry;
-      const secret = await AICredentialService.getSecret(credential.id);
-      if (!secret?.apiKey) continue;
-
-        const model = modelEntry.model;
-        const maxTokens = Math.min(
-          AIOrchestrator.getRequestMaxTokens(model, request.options?.maxTokens, request.options?.targetPath),
-          modelEntry.maxOutputTokens
-        );
-        const started = Date.now();
-        const client = new OpenAI({
-          apiKey: secret.apiKey,
-          baseURL: "https://api.groq.com/openai/v1",
-          timeout: 90000,
-        });
-
-        try {
-          const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
-          if (system) messages.push({ role: "system", content: system });
-          messages.push({ role: "user", content: request.prompt });
-
-          let response: OpenAI.Chat.ChatCompletion;
-          try {
-            response = await client.chat.completions.create({
-              model,
-              messages,
-              temperature: AI_TEMPERATURE,
-              max_tokens: maxTokens,
-              response_format: request.responseMimeType === "application/json" ? { type: "json_object" } : undefined,
-            });
-          } catch (formatError: any) {
-            // Some models/endpoints may reject JSON response_format. This is a
-            // request capability issue, not an API credential failure.
-            if (request.responseMimeType === "application/json" && Number(formatError?.status) === 400 && /response.?format|json_object/i.test(String(formatError?.message || ""))) {
-              response = await client.chat.completions.create({
-                model,
-                messages,
-                temperature: AI_TEMPERATURE,
-                max_tokens: maxTokens,
-              });
-            } else {
-              throw formatError;
-            }
-          }
-
-          const text = response.choices?.[0]?.message?.content || "";
-          if (!text.trim()) throw AIOrchestrator.structuredError("EMPTY_RESPONSE", "The selected model returned an empty response.", 502, "groq", model);
-          if (request.responseMimeType === "application/json") {
-            try { JSON.parse(text.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim()); }
-            catch { throw AIOrchestrator.structuredError("INVALID_AI_RESPONSE", "The selected model returned invalid JSON.", 502, "groq", model); }
-          }
-
-          const usage = response.usage ? {
-            promptTokens: response.usage.prompt_tokens || 0,
-            completionTokens: response.usage.completion_tokens || 0,
-            totalTokens: response.usage.total_tokens || 0,
-          } : undefined;
-
-          await AICredentialService.record(credential.id, true);
-          console.log(`[AI ORCHESTRATOR] SUCCESS task=${request.task} credential=${credential.id} model=${model} duration=${Date.now() - started}ms`);
-
-          return {
-            text,
-            model,
-            durationMs: Date.now() - started,
-            usage,
-            credentialId: credential.id,
-            task: request.task,
-          };
-        } catch (error: any) {
-          lastError = error;
-          const failureType = classifyAIError(error);
-          const status = Number(error?.status || error?.statusCode || 0);
-          const retryAfterSeconds = Number(error?.headers?.["retry-after"] || 0);
-          const cooldownMs = failureType === "RATE_LIMIT_ERROR"
-            ? Math.max(15000, (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 30000))
-            : failureType === "AUTH_ERROR" ? 10 * 60 * 1000 : 0;
-
-          await AICredentialService.record(credential.id, false, failureType, cooldownMs);
-          console.warn(`[AI ORCHESTRATOR] FAIL task=${request.task} credential=${credential.id} model=${model} type=${failureType} status=${status}`);
-
-          // Try the next hardcoded model for this credential. After the last
-          // model, the outer loop advances to the next Admin-managed credential.
-          continue;
-        }
-    }
-
-    const code = classifyAIError(lastError);
-    throw AIOrchestrator.structuredError(code, lastError?.message || "All configured AI routes failed.", Number(lastError?.status || 503), "groq", lastError?.model || "");
+  if (failureType === "AUTH_ERROR" || failureType === "BILLING_SPEND_LIMIT") {
+    return 10 * 60 * 1000;
   }
 
-  private static structuredError(code: string, message: string, statusCode: number, provider: string, model: string) {
-    const err = new Error(JSON.stringify({
+  if (failureType === "DAILY_QUOTA_EXCEEDED") {
+    return 24 * 60 * 60 * 1000;
+  }
+
+  if (failureType === "TRANSIENT_ERROR") {
+    return 5_000;
+  }
+
+  return 0;
+}
+
+function findCredentialSlotGroup(credential: AICredential, groupSlots: readonly number[]): boolean {
+  return groupSlots.includes(Number(credential.priority));
+}
+
+function buildStructuredError(
+  code: string,
+  message: string,
+  statusCode: number,
+  provider: string,
+  model: string,
+  retryAfterMs = 0,
+) {
+  const error: any = new Error(
+    JSON.stringify({
       code,
       errorCode: code,
       stage: "AI Generation",
@@ -162,11 +147,405 @@ export class AIOrchestrator {
       model,
       statusCode,
       message,
-      retryable: false,
-      requestId: `req-${Date.now()}`,
-    }));
-    (err as any).code = code;
-    (err as any).status = statusCode;
-    return err;
+      retryable:
+        code === "RATE_LIMIT_ERROR" ||
+        code === "TEMPORARY_TPM_RATE_LIMIT" ||
+        code === "TRANSIENT_ERROR",
+      retryAfterMs,
+      requestId: `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    }),
+  );
+
+  error.code = code;
+  error.status = statusCode;
+  error.provider = provider;
+  error.model = model;
+  error.retryAfterMs = retryAfterMs;
+  return error;
+}
+
+async function executeGroq(
+  credential: AICredential,
+  apiKey: string,
+  modelEntry: ModelPolicyEntry,
+  request: OrchestratorRequest,
+): Promise<AIResponse> {
+  const client = new OpenAI({
+    apiKey,
+    baseURL: GROQ_BASE_URL,
+    timeout: 90_000,
+    maxRetries: 0,
+  });
+
+  const model = modelEntry.model;
+  const requestedTokens = Math.min(
+    request.options?.maxTokens || AI_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelEntry.maxOutputTokens,
+    AI_DEFAULT_MAX_OUTPUT_TOKENS,
+  );
+
+  const system = buildSystem(request.systemInstruction, request.responseMimeType);
+  const promptLength = system.length + request.prompt.length;
+
+  TokenBudgetEngine.logTPMGuard("groq", model, requestedTokens, promptLength);
+
+  const budget = TokenBudgetEngine.getSafeRequestBudget(
+    "groq",
+    requestedTokens,
+    promptLength,
+    model,
+  );
+
+  if (budget.shouldCompact) {
+    throw buildStructuredError(
+      "PROVIDER_CONTEXT_BUDGET",
+      "The request context is too large for the currently observed Groq TPM window. Reduce workspace context before retrying.",
+      413,
+      "groq",
+      model,
+    );
+  }
+
+  // When the organization has a known shared TPM window and the prompt/output
+  // would exceed the remaining window, wait for the provider reset instead of
+  // burning the remaining 19 keys on the same organization-level quota.
+  if (budget.shouldWait && budget.retryAfterMs > 0) {
+    await sleep(Math.min(budget.retryAfterMs + 250, 20_000));
+  }
+
+  const finalMaxTokens = Math.min(
+    Math.max(256, budget.safeOutputTokens),
+    modelEntry.maxOutputTokens,
+    AI_DEFAULT_MAX_OUTPUT_TOKENS,
+  );
+
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+  if (system) messages.push({ role: "system", content: system });
+  messages.push({ role: "user", content: request.prompt });
+
+  const started = Date.now();
+
+  try {
+    let result: any;
+
+    try {
+      const response = await (client.chat.completions.create({
+        model,
+        messages,
+        temperature: AI_TEMPERATURE,
+        max_completion_tokens: finalMaxTokens,
+        response_format:
+          request.responseMimeType === "application/json"
+            ? { type: "json_object" }
+            : undefined,
+        ...(model.startsWith("openai/gpt-oss-")
+          ? { include_reasoning: false }
+          : {}),
+      } as any) as any).withResponse();
+
+      result = response;
+      const headers = response?.response?.headers;
+      if (headers) TokenBudgetEngine.updateFromHeaders("groq", headers, model);
+    } catch (firstError: any) {
+      const message = safeErrorMessage(firstError);
+
+      // Some Groq model/API combinations do not accept max_completion_tokens.
+      if (
+        Number(firstError?.status) === 400 &&
+        /max_completion_tokens|max_tokens|unsupported parameter|temperature|include_reasoning/i.test(message)
+      ) {
+        result = await (client.chat.completions.create({
+          model,
+          messages,
+          max_tokens: finalMaxTokens,
+          response_format:
+            request.responseMimeType === "application/json"
+              ? { type: "json_object" }
+              : undefined,
+        } as any) as any).withResponse();
+      } else if (
+        request.responseMimeType === "application/json" &&
+        Number(firstError?.status) === 400 &&
+        /response.?format|json_object/i.test(message)
+      ) {
+        result = await (client.chat.completions.create({
+          model,
+          messages,
+          temperature: AI_TEMPERATURE,
+          max_completion_tokens: finalMaxTokens,
+        } as any) as any).withResponse();
+      } else {
+        (firstError as any).model = model;
+        throw firstError;
+      }
+    }
+
+    const response = result.data || result;
+    const headers = result.response?.headers;
+    if (headers) TokenBudgetEngine.updateFromHeaders("groq", headers, model);
+
+    const promptTokens = response.usage?.prompt_tokens || 0;
+    const completionTokens = response.usage?.completion_tokens || 0;
+    const totalTokens = response.usage?.total_tokens || 0;
+
+    if (totalTokens > 0) {
+      TokenBudgetEngine.updateTPMUsageSuccess("groq", totalTokens);
+    }
+
+    const text = String(response.choices?.[0]?.message?.content || "").trim();
+    if (!text) {
+      throw buildStructuredError(
+        "EMPTY_AI_RESPONSE",
+        "The selected Groq model returned an empty response.",
+        502,
+        "groq",
+        model,
+      );
+    }
+
+    if (request.responseMimeType === "application/json") {
+      try {
+        JSON.parse(text.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim());
+      } catch {
+        throw buildStructuredError(
+          "INVALID_AI_JSON",
+          "The selected Groq model returned invalid JSON.",
+          502,
+          "groq",
+          model,
+        );
+      }
+    }
+
+    return {
+      text,
+      model,
+      durationMs: Date.now() - started,
+      usage: response.usage
+        ? { promptTokens, completionTokens, totalTokens }
+        : undefined,
+    };
+  } catch (error: any) {
+    const failureType = classifyAIError(error);
+    const retryAfter = TokenBudgetEngine.extractRetryAfter(
+      safeErrorMessage(error),
+      error?.headers || error?.response?.headers,
+    );
+    const retryAfterMs = TokenBudgetEngine.parseDurationToMs(retryAfter);
+
+    if (failureType === "RATE_LIMIT_ERROR" || failureType === "TEMPORARY_TPM_RATE_LIMIT") {
+      TokenBudgetEngine.updateTPMUsageFromError("groq", safeErrorMessage(error));
+      groqGlobalCooldownUntil = Math.max(
+        groqGlobalCooldownUntil,
+        Date.now() + Math.max(1_000, retryAfterMs || 10_000),
+      );
+
+      throw buildStructuredError(
+        "TEMPORARY_TPM_RATE_LIMIT",
+        safeErrorMessage(error),
+        429,
+        "groq",
+        model,
+        Math.max(1_000, retryAfterMs || 10_000),
+      );
+    }
+
+    (error as any).model = model;
+    throw error;
+  }
+}
+
+export class AIOrchestrator {
+  static async healthCheck(): Promise<HealthResponse> {
+    const started = Date.now();
+    try {
+      const credentials = await AICredentialService.getEnabled();
+      if (!credentials.length) {
+        return {
+          success: false,
+          latencyMs: Date.now() - started,
+          modelUsed: getModelPolicy("generation")[0]?.model || "unknown",
+          error: "No enabled Groq credentials are available.",
+        };
+      }
+
+      const first = credentials.slice().sort((a, b) => a.priority - b.priority)[0];
+      const secret = await AICredentialService.getSecret(first.id);
+      if (!secret?.apiKey) {
+        return {
+          success: false,
+          latencyMs: Date.now() - started,
+          modelUsed: getModelPolicy("generation")[0]?.model || "unknown",
+          error: "The selected Groq credential is not available.",
+        };
+      }
+
+      const client = new OpenAI({
+        apiKey: secret.apiKey,
+        baseURL: GROQ_BASE_URL,
+        timeout: 10_000,
+        maxRetries: 0,
+      });
+
+      // Model listing is deliberately used instead of a completion ping so a
+      // health check does not consume generation tokens from the shared TPM pool.
+      await client.models.list();
+
+      return {
+        success: true,
+        latencyMs: Date.now() - started,
+        modelUsed: getModelPolicy("generation")[0]?.model || "openai/gpt-oss-120b",
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        latencyMs: Date.now() - started,
+        modelUsed: getModelPolicy("generation")[0]?.model || "openai/gpt-oss-120b",
+        error: safeErrorMessage(error),
+      };
+    }
+  }
+
+  static async execute(request: OrchestratorRequest): Promise<OrchestratorResult> {
+    if (groqGlobalCooldownUntil > Date.now()) {
+      const retryAfterMs = Math.max(500, groqGlobalCooldownUntil - Date.now());
+      throw buildStructuredError(
+        "TEMPORARY_TPM_RATE_LIMIT",
+        `Groq organization TPM capacity is temporarily exhausted. Retry in approximately ${Math.ceil(retryAfterMs / 1000)} seconds.`,
+        429,
+        "groq",
+        getModelPolicy(request.task)[0]?.model || "",
+        retryAfterMs,
+      );
+    }
+
+    const group = getRoutingGroupForTask(request.task);
+    const modelPolicy = getModelPolicy(request.task);
+
+    if (!modelPolicy.length) {
+      throw buildStructuredError(
+        "NO_MODEL_POLICY",
+        `No model policy is configured for task '${request.task}'.`,
+        500,
+        "groq",
+        "",
+      );
+    }
+
+    // Exactly the 20 database-managed credential slots are the pool.
+    // Task routing is deterministic to the dedicated slot group.
+    const allEnabled = await AICredentialService.getEnabled();
+    const dedicated = allEnabled.filter((credential) =>
+      findCredentialSlotGroup(credential, group.slots),
+    );
+
+    if (!dedicated.length) {
+      throw buildStructuredError(
+        "NO_AI_CREDENTIALS_FOR_TASK",
+        `No enabled Groq API credentials are available for workload '${group.label}'.`,
+        503,
+        "groq",
+        modelPolicy[0]?.model || "",
+      );
+    }
+
+    const orderedCredentials = rotateWithinGroup(
+      dedicated.sort((a, b) => a.priority - b.priority),
+      group.id,
+    );
+
+    let lastError: any = null;
+
+    for (const credential of orderedCredentials) {
+      const secret = await AICredentialService.getSecret(credential.id);
+      if (!secret?.apiKey) continue;
+
+      // Predictable model behavior:
+      // 1 primary model for a normal request.
+      // Fallback to model #2/#3 ONLY when the specific model is unavailable.
+      for (const modelEntry of modelPolicy) {
+        if (isModelTemporarilyUnavailable(credential.id, modelEntry.model)) {
+          continue;
+        }
+
+        try {
+          const response = await executeGroq(
+            credential,
+            secret.apiKey,
+            modelEntry,
+            request,
+          );
+
+          await AICredentialService.record(
+            credential.id,
+            true,
+            undefined,
+            undefined,
+          );
+
+          return {
+            ...response,
+            credentialId: credential.id,
+            task: request.task,
+            provider: "groq",
+          };
+        } catch (error: any) {
+          lastError = error;
+
+          const failureType = classifyAIError(error);
+          const retryAfter = TokenBudgetEngine.extractRetryAfter(
+            safeErrorMessage(error),
+            error?.headers || error?.response?.headers,
+          );
+          const retryAfterMs = TokenBudgetEngine.parseDurationToMs(retryAfter);
+
+          if (failureType === "MODEL_UNAVAILABLE") {
+            markModelUnavailable(credential.id, modelEntry.model);
+          }
+
+          const cooldownMs = isRateLimitFailure(failureType)
+            ? Math.max(10_000, retryAfterMs || 30_000)
+            : cooldownFor(failureType, error);
+
+          await AICredentialService.record(
+            credential.id,
+            false,
+            failureType,
+            cooldownMs,
+          );
+
+          // A shared organization-level 429 must stop the entire route ladder.
+          if (isRateLimitFailure(failureType)) {
+            groqGlobalCooldownUntil = Math.max(
+              groqGlobalCooldownUntil,
+              Date.now() + Math.max(1_000, retryAfterMs || 10_000),
+            );
+            throw error;
+          }
+
+          // Authentication/billing failures invalidate this credential for the
+          // remainder of the cooldown; move to the next credential.
+          if (isKeyTerminalFailure(failureType)) {
+            break;
+          }
+
+          // Only 404/403 model-access failures should advance to the next model
+          // on the same credential.
+          if (!modelFallbackAllowed(failureType)) {
+            break;
+          }
+        }
+      }
+    }
+
+    const code = classifyAIError(lastError);
+    throw buildStructuredError(
+      code,
+      safeErrorMessage(lastError) || "All configured Groq routes failed.",
+      Number(lastError?.status || lastError?.statusCode || 503),
+      "groq",
+      String(lastError?.model || modelPolicy[0]?.model || ""),
+      Number(lastError?.retryAfterMs || 0),
+    );
   }
 }

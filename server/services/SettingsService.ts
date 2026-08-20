@@ -1,76 +1,91 @@
-import fs from "fs";
-import path from "path";
+import { getSupabaseAdmin, isSupabaseAdminConfigured } from "../lib/supabaseAdmin";
 
 export interface UserConfig {
   userId: string;
   email: string;
   displayName: string;
   photo: string;
-  provider: "groq";
+  provider: "platform-router";
   apiKey: "";
   defaultModel: "platform-router";
-  temperature: 0.1;
-  maxTokens: 65536;
+  temperature: number;
+  maxTokens: number;
   createdDate: string;
   updatedDate: string;
   role?: string;
   isActive?: boolean;
 }
 
-const USERS_DB_PATH = path.join(process.cwd(), "data", "users.json");
+function rowToConfig(data: any): UserConfig {
+  return {
+    userId: data.id,
+    email: data.email || "",
+    displayName: data.full_name || data.email?.split("@")[0] || "User",
+    photo: data.photo_url || "",
+    provider: "platform-router",
+    apiKey: "",
+    defaultModel: "platform-router",
+    temperature: 0.1,
+    maxTokens: 65536,
+    role: data.role || "user",
+    isActive: data.is_active ?? true,
+    createdDate: data.created_at || new Date().toISOString(),
+    updatedDate: data.updated_at || new Date().toISOString(),
+  };
+}
+
+function requireConfigured() {
+  if (!isSupabaseAdminConfigured()) {
+    const err: any = new Error("Supabase server configuration is missing. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+    err.code = "SUPABASE_NOT_CONFIGURED";
+    err.statusCode = 503;
+    throw err;
+  }
+  return getSupabaseAdmin();
+}
 
 export class SettingsService {
-  private static ensureDb() {
-    const dir = path.dirname(USERS_DB_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    if (!fs.existsSync(USERS_DB_PATH)) fs.writeFileSync(USERS_DB_PATH, JSON.stringify({}, null, 2), "utf8");
+  static async getAsync(userId: string): Promise<UserConfig | null> {
+    const supabaseAdmin = requireConfigured();
+    const { data, error } = await supabaseAdmin.from("profiles").select("*").eq("id", userId).maybeSingle();
+    if (error) throw error;
+    return data ? rowToConfig(data) : null;
   }
 
-  private static readAll(): Record<string, UserConfig> {
-    this.ensureDb();
-    try { return JSON.parse(fs.readFileSync(USERS_DB_PATH, "utf8")) || {}; }
-    catch { return {}; }
+  static async getAllConfigsAsync(): Promise<Record<string, UserConfig>> {
+    const supabaseAdmin = requireConfigured();
+    const { data, error } = await supabaseAdmin.from("profiles").select("*").order("created_at", { ascending: true });
+    if (error) throw error;
+    const result: Record<string, UserConfig> = {};
+    for (const row of data || []) result[row.id] = rowToConfig(row);
+    return result;
   }
 
-  private static writeAll(data: Record<string, UserConfig>) {
-    this.ensureDb();
-    fs.writeFileSync(USERS_DB_PATH, JSON.stringify(data, null, 2), "utf8");
+  static async updateRoleAndStatusAsync(userId: string, update: { role?: string; isActive?: boolean }): Promise<UserConfig | null> {
+    const supabaseAdmin = requireConfigured();
+    const payload: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (update.role !== undefined) payload.role = update.role;
+    if (update.isActive !== undefined) payload.is_active = update.isActive;
+
+    const { data, error } = await supabaseAdmin.from("profiles").update(payload).eq("id", userId).select("*").maybeSingle();
+    if (error) throw error;
+    return data ? rowToConfig(data) : null;
   }
 
-  static get(userId: string): UserConfig | null { return this.readAll()[userId] || null; }
-  static getAllConfigs(): Record<string, UserConfig> { return this.readAll(); }
-
-  static updateRoleAndStatus(userId: string, update: { role?: string; isActive?: boolean }): UserConfig | null {
-    const all = this.readAll();
-    if (!all[userId]) return null;
-    all[userId] = { ...all[userId], ...update, updatedDate: new Date().toISOString() };
-    this.writeAll(all);
-    return all[userId];
-  }
-
-  static getDecrypted(userId: string): UserConfig | null { return this.get(userId); }
-
-  static save(userId: string, data: Partial<UserConfig> & { email: string; displayName?: string }): UserConfig {
-    const all = this.readAll();
-    const existing = all[userId];
+  static async saveAsync(userId: string, data: Partial<UserConfig> & { email: string; displayName?: string }): Promise<UserConfig> {
+    const supabaseAdmin = requireConfigured();
     const now = new Date().toISOString();
-    const updated: UserConfig = {
-      userId,
+    const payload = {
+      id: userId,
       email: data.email,
-      displayName: data.displayName || existing?.displayName || data.email.split("@")[0],
-      photo: data.photo || existing?.photo || "",
-      provider: "groq",
-      apiKey: "",
-      defaultModel: "platform-router",
-      temperature: 0.1,
-      maxTokens: 65536,
-      role: data.role || existing?.role || "user",
-      isActive: data.isActive ?? existing?.isActive ?? true,
-      createdDate: existing?.createdDate || now,
-      updatedDate: now,
+      full_name: data.displayName || data.email.split("@")[0],
+      role: data.role || "user",
+      is_active: data.isActive ?? true,
+      photo_url: data.photo || "",
+      updated_at: now,
     };
-    all[userId] = updated;
-    this.writeAll(all);
-    return updated;
+    const { data: row, error } = await supabaseAdmin.from("profiles").upsert(payload).select("*").single();
+    if (error) throw error;
+    return rowToConfig(row);
   }
 }

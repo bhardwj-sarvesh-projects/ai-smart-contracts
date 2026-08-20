@@ -26,10 +26,10 @@ export default function AuthView({ onLoginSuccess }: AuthViewProps) {
 
       const loggedInUser = await login(email, password);
 
-      performance.mark('firebase_auth_complete');
-      performance.measure('Login Click -> Firebase Auth', 'login_click', 'firebase_auth_complete');
-      const m = performance.getEntriesByName('Login Click -> Firebase Auth').pop();
-      if (m) console.log(`[PERF] 2. Firebase Auth Complete: ${m.duration.toFixed(2)}ms`);
+      performance.mark('supabase_auth_complete');
+      performance.measure('Login Click -> Supabase Auth', 'login_click', 'supabase_auth_complete');
+      const m = performance.getEntriesByName('Login Click -> Supabase Auth').pop();
+      if (m) console.log(`[PERF] 2. Supabase Auth Complete: ${m.duration.toFixed(2)}ms`);
 
       onLoginSuccess(loggedInUser);
     } catch (err: any) {

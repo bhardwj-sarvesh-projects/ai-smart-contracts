@@ -16,8 +16,8 @@ import SettingsModal from './components/SettingsModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAuth } from './context/AuthContext';
 import { AppCache } from './lib/cache';
-import { auth } from './firebase/firebase';
-import { getIdToken } from 'firebase/auth';
+import { getValidAccessToken } from './lib/supabase';
+import { apiClient } from './lib/apiClient';
 import { GenerationService } from './features/generation/GenerationService';
 import { PatchEngine, WorkspaceManager, BackgroundTaskManager } from './core/EngineeringCore';
 
@@ -30,11 +30,13 @@ const AuditingHub = lazy(() => import('./components/AuditingHub'));
 const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
 
 export default function App() {
+  const { user, logout, loading } = useAuth();
+  const projectCacheKey = `user_projects:${user?.uid || "anonymous"}`;
   const [projects, setProjects] = useState<Project[]>(() => {
-    return AppCache.get<Project[]>('user_projects') || [];
+    return AppCache.get<Project[]>(projectCacheKey) || [];
   });
   const [isProjectsLoading, setIsProjectsLoading] = useState<boolean>(() => {
-    return AppCache.get('user_projects') ? false : true;
+    return AppCache.get(projectCacheKey) ? false : true;
   });
   const [activeProjectId, setActiveProjectId] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -87,7 +89,6 @@ export default function App() {
   const [isDeploying, setIsDeploying] = useState(false);
 
   // Authentication & Settings States
-  const { user, logout, loading } = useAuth();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   // Toast notifications state
@@ -107,32 +108,22 @@ export default function App() {
   }, [toast]);
 
   // Active AI Provider config with cache fallback
-  const [activeProvider, setActiveProvider] = useState('groq-router');
+  const [activeProvider, setActiveProvider] = useState('platform-router');
   const [activeModel, setActiveModel] = useState('Intelligent Router');
 
-  // Authenticated fetch: send a verified Firebase ID token. Legacy identity headers
-  // are retained only for non-security user isolation compatibility.
+  // Authenticated fetch: the Supabase access token is the ONLY client identity proof.
+  // Use the centralized API client so every /api request gets the same auth, timeout,
+  // and non-JSON/HTML response protection. This prevents the recurring
+  // `Unexpected token '<'` crash when a host returns SPA HTML for an API request.
   const authedFetch = async (url: string, options: RequestInit = {}) => {
-    const headers = { ...(options.headers || {}) } as Record<string, string>;
-    if (user) {
-      headers['x-user-id'] = user.uid;
-      headers['x-user-email'] = user.email;
-      headers['x-user-name'] = (user as any).displayName || user.fullName || '';
-      headers['x-user-photo'] = user.photoURL || '';
-      try {
-        const firebaseUser = auth.currentUser;
-        if (firebaseUser) headers['Authorization'] = `Bearer ${await getIdToken(firebaseUser, true)}`;
-      } catch (tokenError) {
-        console.warn('[AUTH] Unable to refresh Firebase ID token:', tokenError);
-      }
-    }
-    if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-    return fetch(url, { ...options, headers });
+    return apiClient.request(url, options);
   };
 
   // Independent background startup load when user is present
   useEffect(() => {
     if (user) {
+      setActiveTab('dashboard');
+      setActiveProjectId('');
       performance.mark('dashboard_first_paint');
       if (performance.getEntriesByName('login_click').length > 0) {
         performance.measure('Login Click -> Dashboard First Paint', 'login_click', 'dashboard_first_paint');
@@ -142,11 +133,24 @@ export default function App() {
         }
       }
 
-      // Execute each query completely independently
+      // Hydrate only this authenticated user's project cache. Never reuse a
+      // global project cache across accounts (that could briefly expose another
+      // user's workspace before the authoritative Supabase query completes).
+      const cachedProjects = AppCache.get<Project[]>(projectCacheKey);
+      if (cachedProjects) {
+        setProjects(cachedProjects);
+        setIsProjectsLoading(false);
+        if (cachedProjects.length > 0 && !activeProjectId) setActiveProjectId(cachedProjects[0].id);
+      } else {
+        setProjects([]);
+        setIsProjectsLoading(true);
+      }
+
       fetchProjects();
       loadUserSettings();
     } else {
       setProjects([]);
+      setActiveProjectId('');
       setIsProjectsLoading(false);
     }
   }, [user]);
@@ -154,9 +158,10 @@ export default function App() {
   const loadUserSettings = async () => {
     try {
       const res = await authedFetch('/api/settings');
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
-        setActiveProvider('groq-router');
+        setActiveProvider('platform-router');
         setActiveModel('Intelligent Router');
         AppCache.set('user_settings', data, 300000);
 
@@ -166,6 +171,8 @@ export default function App() {
           const m = performance.getEntriesByName('Login Click -> Settings Loaded').pop();
           if (m) console.log(`[PERF] ⚙️ Settings Loaded: ${m.duration.toFixed(2)}ms`);
         }
+      } else if (!res.ok) {
+        console.warn('[SETTINGS] Response not ok:', res.status);
       }
     } catch (err) {
       console.error('Failed to load user settings', err);
@@ -176,20 +183,18 @@ export default function App() {
     try {
       setIsProjectsLoading(true);
       const res = await authedFetch('/api/projects');
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
-        setProjects(data);
-        AppCache.set('user_projects', data, 300000);
-        if (data.length > 0 && !activeProjectId) {
-          setActiveProjectId(data[0].id);
+        if (Array.isArray(data)) {
+          setProjects(data);
+          AppCache.set(projectCacheKey, data, 300000);
+          if (data.length > 0 && !activeProjectId) {
+            setActiveProjectId(data[0].id);
+          }
         }
-
-        performance.mark('projects_loaded');
-        if (performance.getEntriesByName('login_click').length > 0) {
-          performance.measure('Login Click -> Projects Loaded', 'login_click', 'projects_loaded');
-          const m = performance.getEntriesByName('Login Click -> Projects Loaded').pop();
-          if (m) console.log(`[PERF] 📁 Projects Loaded: ${m.duration.toFixed(2)}ms`);
-        }
+      } else if (!res.ok) {
+        console.warn('[PROJECTS] Response not ok:', res.status);
       }
     } catch (err) {
       console.error('Failed to load projects', err);
@@ -497,16 +502,13 @@ export default function App() {
       }
       console.log("[CONTRACT GENERATION STEP] Validation passed");
 
-      // Step 3: Provider selected
-      console.log(`[CONTRACT GENERATION STEP] Provider selected: ${activeProvider} (${activeModel})`);
+      // Step 3: Platform AI router
+      console.log("[CONTRACT GENERATION STEP] Platform AI router selected (model and credentials are server-controlled)");
 
-      // Step 4: API key loaded
-      console.log("[CONTRACT GENERATION STEP] API key loaded: Yes (credentials verified)");
-
-      // Step 5: AI request started
+      // Step 4: AI request started
       console.log("[CONTRACT GENERATION STEP] AI request started");
 
-      // Step 6: EngineeringCore Pipeline Execution
+      // Step 5: EngineeringCore Pipeline Execution
       console.log("[CONTRACT GENERATION STEP] EngineeringCore pipeline started");
 
       const aiGenerated = await GenerationService.generate({
@@ -521,7 +523,7 @@ export default function App() {
         throw new Error("Invalid AI output: received null or empty response from EngineeringCore pipeline.");
       }
 
-      // Step 8: Response parsed
+      // Step 7: Response parsed
       console.log("[CONTRACT GENERATION STEP] EngineeringCore output validated");
 
       // Ensure complete enterprise workspace structure (docs, scripts, tests, reports)
@@ -568,7 +570,7 @@ export default function App() {
       setIsGeneratingLoaderOpen(false);
       setPendingConfig(null);
 
-      // Step 9: Contract rendered
+      // Step 8: Contract rendered
       console.log("[CONTRACT GENERATION STEP] Contract rendered");
     } catch (err: any) {
       console.error('[CONTRACT GENERATION EXCEPTION]', err);
@@ -1386,6 +1388,7 @@ export default function App() {
                               isCompiling={isCompiling}
                               isDeploying={isDeploying}
                               theme={theme}
+                              authedFetch={authedFetch}
                             />
                           </Suspense>
                         </ErrorBoundary>

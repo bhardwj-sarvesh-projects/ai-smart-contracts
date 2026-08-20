@@ -7,8 +7,11 @@ import { motion } from 'motion/react';
 import AdminAIInfrastructure from './AdminAIInfrastructure';
 
 interface UserProfile {
-  uid: string;
-  fullName: string;
+  uid?: string;
+  userId?: string;
+  id?: string;
+  fullName?: string;
+  displayName?: string;
   email: string;
   role: string;
   isActive: boolean;
@@ -19,6 +22,8 @@ interface UserProfile {
 interface ProjectData {
   id: string;
   userId?: string;
+  userEmail?: string;
+  userName?: string;
   name: string;
   blockchain: string;
   language: string;
@@ -56,51 +61,112 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
   const [projectSearch, setProjectSearch] = useState('');
   const [selectedProject, setSelectedProject] = useState<ProjectData | null>(null);
 
+  const [usersError, setUsersError] = useState<string | null>(null);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
+
   const readAdminError = async (response: Response): Promise<Error> => {
     let payload: any = null;
-    try {
-      payload = await response.clone().json();
-    } catch {
-      // Some proxy/server failures are not JSON.
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+      const error = new Error(`The API endpoint returned HTML instead of JSON (HTTP ${response.status}).`);
+      (error as any).status = response.status;
+      (error as any).code = 'API_HTML_RESPONSE';
+      return error;
     }
 
-    const error = new Error(
+    try {
+      payload = await response.json();
+    } catch {
+      // JSON parsing failure
+    }
+
+    const message =
+      (typeof payload?.error === 'object' ? payload?.error?.message : payload?.error) ||
       payload?.message ||
       (response.status === 503
-        ? "The server cannot verify administrator access because Firebase Admin credentials are not configured correctly."
+        ? "The server cannot verify administrator access because Supabase Admin credentials are not configured correctly."
         : response.status === 403
-          ? "Your Firebase account is authenticated, but it is not authorized as an administrator."
+          ? "Your Supabase account is authenticated, but it is not authorized as an administrator."
           : response.status === 401
-            ? "Your Firebase administrator session could not be verified. Please sign out and sign in again."
-            : `Administrator request failed with HTTP ${response.status}.`)
-    );
+            ? "Your Supabase administrator session could not be verified. Please sign out and sign in again."
+            : `Administrator request failed with HTTP ${response.status}.`);
+
+    const error = new Error(message);
     (error as any).status = response.status;
-    (error as any).code = payload?.code;
+    (error as any).code = payload?.code || (typeof payload?.error === 'object' ? payload?.error?.code : undefined);
     return error;
   };
 
   const fetchAdminData = async () => {
     setIsLoading(true);
     setError(null);
+    setUsersError(null);
+    setProjectsError(null);
+    setStatsError(null);
+
     try {
-      const [usersRes, projectsRes, statsRes] = await Promise.all([
+      const [usersRes, projectsRes, statsRes] = await Promise.allSettled([
         authedFetch('/api/admin/users'),
         authedFetch('/api/admin/projects'),
         authedFetch('/api/admin/stats')
       ]);
 
-      const failedResponse = [usersRes, projectsRes, statsRes].find((response) => !response.ok);
-      if (failedResponse) {
-        throw await readAdminError(failedResponse);
+      if (usersRes.status === 'fulfilled') {
+        if (usersRes.value.ok) {
+          try {
+            const uData = await usersRes.value.json();
+            setUsers(Array.isArray(uData) ? uData : []);
+          } catch {
+            setUsersError("Failed to parse user accounts response.");
+          }
+        } else {
+          const err = await readAdminError(usersRes.value);
+          if (usersRes.value.status === 401 || usersRes.value.status === 403 || usersRes.value.status === 503) {
+            setError(err.message);
+          } else {
+            setUsersError(err.message);
+          }
+        }
+      } else {
+        setUsersError("Unable to reach user accounts endpoint.");
       }
 
-      const usersData = await usersRes.json();
-      const projectsData = await projectsRes.json();
-      const statsData = await statsRes.json();
+      if (projectsRes.status === 'fulfilled') {
+        if (projectsRes.value.ok) {
+          try {
+            const pData = await projectsRes.value.json();
+            setProjects(Array.isArray(pData) ? pData : []);
+          } catch {
+            setProjectsError("Failed to parse projects response.");
+          }
+        } else {
+          const err = await readAdminError(projectsRes.value);
+          if (projectsRes.value.status === 401 || projectsRes.value.status === 403) {
+            setError(err.message);
+          } else {
+            setProjectsError(err.message);
+          }
+        }
+      } else {
+        setProjectsError("Unable to reach projects endpoint.");
+      }
 
-      setUsers(Array.isArray(usersData) ? usersData : []);
-      setProjects(Array.isArray(projectsData) ? projectsData : []);
-      setStats(statsData);
+      if (statsRes.status === 'fulfilled') {
+        if (statsRes.value.ok) {
+          try {
+            const sData = await statsRes.value.json();
+            setStats(sData);
+          } catch {
+            setStatsError("Failed to parse analytics statistics response.");
+          }
+        } else {
+          const err = await readAdminError(statsRes.value);
+          setStatsError(err.message);
+        }
+      } else {
+        setStatsError("Unable to reach system stats endpoint.");
+      }
     } catch (err: any) {
       setError(err.message || "An unexpected admin loading error occurred.");
     } finally {
@@ -112,14 +178,20 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
     fetchAdminData();
   }, []);
 
-  const handleToggleStatus = async (userId: string) => {
+  const getUserKey = (u: UserProfile): string => {
+    return u.userId || u.uid || u.id || u.email || '';
+  };
+
+  const handleToggleStatus = async (user: UserProfile) => {
+    const targetId = getUserKey(user);
+    if (!targetId) return;
     try {
-      const res = await authedFetch(`/api/admin/users/${userId}/toggle-status`, {
+      const res = await authedFetch(`/api/admin/users/${encodeURIComponent(targetId)}/toggle-status`, {
         method: 'PUT'
       });
       if (res.ok) {
         const updated = await res.json();
-        setUsers(prev => prev.map(u => u.uid === userId ? { ...u, isActive: updated.isActive } : u));
+        setUsers(prev => prev.map(u => getUserKey(u) === targetId ? { ...u, isActive: updated.isActive } : u));
         if (showToast) {
           showToast(`User status updated to ${updated.isActive ? 'Active' : 'Blocked'}.`, 'success');
         }
@@ -133,18 +205,20 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
     }
   };
 
-  const handleToggleRole = async (userId: string, currentRole: string) => {
-    const targetRole = currentRole === 'admin' ? 'user' : 'admin';
+  const handleToggleRole = async (user: UserProfile) => {
+    const targetId = getUserKey(user);
+    if (!targetId) return;
+    const targetRole = user.role === 'admin' ? 'user' : 'admin';
     if (!window.confirm(`Are you sure you want to change this user's role to ${targetRole}?`)) return;
     try {
-      const res = await authedFetch(`/api/admin/users/${userId}/role`, {
+      const res = await authedFetch(`/api/admin/users/${encodeURIComponent(targetId)}/role`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role: targetRole })
       });
       if (res.ok) {
         const updated = await res.json();
-        setUsers(prev => prev.map(u => u.uid === userId ? { ...u, role: updated.role } : u));
+        setUsers(prev => prev.map(u => getUserKey(u) === targetId ? { ...u, role: updated.role } : u));
         if (showToast) {
           showToast(`User role updated to ${updated.role}.`, 'success');
         }
@@ -160,7 +234,7 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
 
   const filteredUsers = (users || []).filter(u => {
     if (!u) return false;
-    const fullName = String(u.fullName || 'Registered User').toLowerCase();
+    const fullName = String(u.fullName || u.displayName || 'Registered User').toLowerCase();
     const email = String(u.email || '').toLowerCase();
     const search = (userSearch || '').toLowerCase();
     return fullName.includes(search) || email.includes(search);
@@ -221,13 +295,13 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
       {error ? (
         <div className="p-8 text-center max-w-md mx-auto space-y-4">
           <ShieldAlert className="w-12 h-12 text-red-500 mx-auto" />
-          <h2 className="text-md font-bold">{error.includes('Firebase Admin') ? 'Administrator Authentication Service Not Configured' : 'Administrator Panel Error'}</h2>
+          <h2 className="text-md font-bold">{error.includes('Supabase') ? 'Administrator Authentication Service Not Configured' : 'Administrator Panel Error'}</h2>
           <p className="text-xs text-slate-400">{error}</p>
-          {error.includes('Firebase Admin') && (
+          {error.includes('Supabase') && (
             <div className={`text-left text-xs rounded-xl border p-4 ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
               <p className="font-semibold mb-2">Server configuration required</p>
               <p className="text-slate-400 leading-relaxed">
-                Configure FIREBASE_SERVICE_ACCOUNT_JSON, or FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY, on the server. Do not place these credentials in frontend code.
+                Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the server. Never place the service-role key in frontend code.
               </p>
             </div>
           )}
@@ -335,12 +409,15 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-900/60 text-xs">
-                      {filteredUsers.map((u) => {
+                      {filteredUsers.map((u, index) => {
+                        const rawKey = getUserKey(u);
+                        const userKey = rawKey ? `user-${rawKey}-${index}` : `user-${index}`;
                         const isSelf = u.email === 'sarveshtiwarisarvesh@gmail.com';
+                        const name = u.fullName || u.displayName || 'Registered User';
                         return (
-                          <tr key={u.uid} className={isDark ? 'hover:bg-slate-900/20' : 'hover:bg-slate-50/20'}>
+                          <tr key={userKey} className={isDark ? 'hover:bg-slate-900/20' : 'hover:bg-slate-50/20'}>
                             <td className="px-6 py-4">
-                              <div className="font-semibold">{u.fullName || 'Registered User'}</div>
+                              <div className="font-semibold">{name}</div>
                               <div className="text-[10px] text-slate-400 mt-0.5">{u.email}</div>
                             </td>
                             <td className="px-6 py-4">
@@ -369,7 +446,7 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
                               <div className="flex items-center justify-end gap-2">
                                 <button
                                   disabled={isSelf}
-                                  onClick={() => handleToggleRole(u.uid, u.role)}
+                                  onClick={() => handleToggleRole(u)}
                                   className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold tracking-wider uppercase border transition-all disabled:opacity-30 disabled:pointer-events-none cursor-pointer ${
                                     isDark 
                                       ? 'border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800' 
@@ -382,7 +459,7 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
 
                                 <button
                                   disabled={isSelf}
-                                  onClick={() => handleToggleStatus(u.uid)}
+                                  onClick={() => handleToggleStatus(u)}
                                   className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-extrabold tracking-wider uppercase border transition-all disabled:opacity-30 disabled:pointer-events-none cursor-pointer ${
                                     u.isActive !== false
                                       ? 'border-red-200 bg-red-50 hover:bg-red-100/60 text-red-600 dark:bg-red-950/20 dark:border-red-900/40 dark:text-red-400'
@@ -448,17 +525,19 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-900/60 text-xs">
-                      {filteredProjects.map((p) => {
-                        const ownerUser = users.find(u => u.uid === p.userId);
-                        const ownerEmail = ownerUser?.email || 'Unknown';
+                      {filteredProjects.map((p, index) => {
+                        const projectKey = p.id ? `proj-${p.id}-${index}` : `proj-${index}`;
+                        const ownerUser = users.find(u => getUserKey(u) === p.userId);
+                        const ownerEmail = p.userEmail || ownerUser?.email || p.userId || 'Unknown';
                         return (
-                          <tr key={p.id} className={isDark ? 'hover:bg-slate-900/20' : 'hover:bg-slate-50/20'}>
+                          <tr key={projectKey} className={isDark ? 'hover:bg-slate-900/20' : 'hover:bg-slate-50/20'}>
                             <td className="px-6 py-4">
                               <div className="font-semibold">{p.name}</div>
                               <div className="text-[10px] text-slate-400 mt-0.5">ID: {p.id}</div>
                             </td>
                             <td className="px-6 py-4 max-w-[150px] break-all leading-relaxed whitespace-normal text-slate-500 dark:text-slate-400">
-                              {ownerEmail}
+                              <div>{ownerEmail}</div>
+                              {p.userName && <div className="text-[10px] text-slate-400 mt-0.5">{p.userName}</div>}
                             </td>
                             <td className="px-6 py-4 uppercase font-mono text-[10px] tracking-wider text-slate-400">
                               {p.blockchain} ({p.language})

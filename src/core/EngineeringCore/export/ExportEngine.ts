@@ -32,7 +32,7 @@ export class ExportEngine {
       const name = f.path.toUpperCase();
       return name.includes('COMPILATION_REPORT') || name.includes('SECURITY_REPORT') || name.includes('TEST_REPORT') || name.includes('DEPLOYMENT_REPORT');
     });
-    return { passed: true, presentReports: reports.map(r => r.path), missingReports: [] };
+    return { passed: reports.length === 0, presentReports: reports.map(r => r.path), missingReports: [] };
   }
 
   public static validateDocumentation(files: ProjectFile[]): { passed: boolean; presentDocs: string[]; missingDocs: string[] } {

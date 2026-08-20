@@ -46,7 +46,7 @@ export class GenerationService {
               errorCode: "API_ERROR",
               stage: "AI Generation",
               engine: "AIService",
-              provider: 'groq',
+              provider: 'platform-router',
               model: 'platform-router',
               statusCode: res.status,
               message: text || 'AI generation failed',
@@ -55,7 +55,34 @@ export class GenerationService {
           };
         }
         const errorObj = errData.error || errData;
-        throw new Error(typeof errorObj === 'string' ? errorObj : JSON.stringify(errorObj));
+        const errorMessage = typeof errorObj === 'string'
+          ? errorObj
+          : String(errorObj?.message || errData?.message || 'AI generation failed');
+
+        // Preserve structured server metadata so the client runtime can make
+        // the same terminal/non-terminal decision as the server orchestrator.
+        // The previous JSON-string-only error erased status/code and caused
+        // model-unavailable/rate-limit failures to be retried as if they were
+        // ordinary validation failures.
+        const structuredError: any = new Error(errorMessage);
+        if (errorObj && typeof errorObj === 'object') {
+          Object.assign(structuredError, {
+            code: errorObj.code || errorObj.errorCode,
+            errorCode: errorObj.errorCode || errorObj.code,
+            status: errorObj.statusCode || res.status,
+            statusCode: errorObj.statusCode || res.status,
+            retryable: errorObj.retryable,
+            retryAfter: errorObj.retryAfter,
+            provider: errorObj.provider,
+            model: errorObj.model,
+            stage: errorObj.stage,
+            engine: errorObj.engine,
+          });
+        } else {
+          structuredError.status = res.status;
+          structuredError.statusCode = res.status;
+        }
+        throw structuredError;
       }
 
       const json = await res.json();
