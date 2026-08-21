@@ -2,6 +2,38 @@ export class DeterministicConfigGenerator {
   public static getConfigFile(targetPath: string, profile?: any): string | null {
     const filename = (targetPath.split('/').pop() || '').toLowerCase();
 
+    if (filename === '.gitignore' || filename === 'gitignore') {
+      return `# Build & Artifacts
+out/
+target/
+build/
+node_modules/
+.env
+*.log
+.diagnostics/
+`;
+    }
+
+    if (filename === 'readme.md') {
+      const projName = profile?.contractType || 'Smart Contract Project';
+      const blockchain = profile?.blockchain || 'Ethereum';
+      const framework = profile?.framework || 'Foundry';
+      return `# ${projName}
+
+Production-grade ${blockchain} smart contract suite built using ${framework}.
+
+## Structure
+
+- \`contracts/\` / \`src/\`: Core smart contracts
+- \`test/\` / \`tests/\`: Comprehensive test suite
+- \`script/\` / \`scripts/\`: Deployment scripts
+
+## Building & Testing
+
+Refer to framework tooling for local compilation and test execution.
+`;
+    }
+
     if (filename === '.env.example' || filename === '.env') {
       return `# Network and Node Configuration
 RPC_URL=https://mainnet.infura.io/v3/YOUR_INFURA_KEY
@@ -115,6 +147,22 @@ AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", rev = "
 std = "0x1"
 aptos_framework = "0x1"
 main = "_"`;
+    }
+
+    if (filename === 'index.html') {
+      const projName = profile?.contractType || 'App';
+      return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${projName}</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>`;
     }
 
     return null;

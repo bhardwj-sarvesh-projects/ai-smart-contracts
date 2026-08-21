@@ -94,88 +94,142 @@ class ApiClient {
     }
 
     try {
-      const response = await fetch(url, {
-        credentials: fetchOpts.credentials || 'same-origin',
-        ...fetchOpts,
-        headers,
-        signal: controller.signal,
-      });
+      let attempts = 0;
+      const isGet = (fetchOpts.method || 'GET').toUpperCase() === 'GET';
+      const maxAttempts = isGet ? 3 : 2;
+      let lastError: any = null;
 
-      // API boundary guard. Every /api response must be JSON. A missing/mismatched
-      // route can otherwise fall through to a SPA host and return index.html, which
-      // causes every existing caller that does response.json() to fail with the
-      // misleading `Unexpected token '<'` error. Normalize such responses into a
-      // real JSON Response while preserving the original HTTP status.
-      if (path === '/api' || path.startsWith('/api/')) {
-        const contentType = (response.headers.get('content-type') || '').toLowerCase();
-        const looksJson = contentType.includes('application/json') || contentType.includes('+json');
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          const response = await fetch(url, {
+            credentials: fetchOpts.credentials || 'same-origin',
+            ...fetchOpts,
+            headers,
+            signal: controller.signal,
+          });
 
-        if (!looksJson) {
-          let bodyPreview = '';
-          try {
-            bodyPreview = (await response.clone().text()).trim();
-          } catch {
-            // Ignore clone/read failures; the normalized error below is sufficient.
+          // API boundary guard. Every /api response must be JSON. A missing/mismatched
+          // route can otherwise fall through to a SPA host and return index.html, which
+          // causes every existing caller that does response.json() to fail with the
+          // misleading `Unexpected token '<'` error. Normalize such responses into a
+          // real JSON Response while preserving the original HTTP status.
+          if (path === '/api' || path.startsWith('/api/')) {
+            const contentType = (response.headers.get('content-type') || '').toLowerCase();
+            const looksJson = contentType.includes('application/json') || contentType.includes('+json');
+
+            if (!looksJson) {
+              let bodyPreview = '';
+              try {
+                bodyPreview = (await response.clone().text()).trim();
+              } catch {
+                // Ignore clone/read failures; the normalized error below is sufficient.
+              }
+
+              const isHtml = contentType.includes('text/html') ||
+                contentType.includes('application/xhtml+xml') ||
+                /^<!doctype\s+html/i.test(bodyPreview) ||
+                /^<html[\s>]/i.test(bodyPreview);
+
+              const isAuthStatus = response.status === 401 || response.status === 403;
+              const isUnavailable = response.status === 502 || response.status === 503 || response.status === 504;
+
+              const code = isAuthStatus
+                ? (response.status === 403 ? 'ADMIN_REQUIRED' : 'AUTH_REQUIRED')
+                : isUnavailable
+                  ? 'SERVICE_UNAVAILABLE'
+                  : (isHtml ? 'API_HTML_RESPONSE' : 'API_NON_JSON_RESPONSE');
+
+              const method = (fetchOpts.method || 'GET').toUpperCase();
+              const safeBodySample = bodyPreview.slice(0, 120).replace(/\s+/g, ' ');
+              const message = isAuthStatus
+                ? (response.status === 403
+                    ? 'Administrator privileges required to access this resource.'
+                    : 'Authentication required. Please sign in to continue.')
+                : isUnavailable
+                  ? 'Service is temporarily warming up or unavailable. Please retry in a few moments.'
+                  : (isHtml
+                      ? `API endpoint ${method} ${path} returned HTML instead of JSON (HTTP ${response.status}, Content-Type: ${contentType || 'unknown'}). Expected application/json. The request likely reached an SPA/static fallback instead of the Express API.`
+                      : `API endpoint ${method} ${path} returned a non-JSON response (HTTP ${response.status}, Content-Type: ${contentType || 'unknown'}).`);
+
+              if (!isAuthStatus && !isUnavailable) {
+                console.error(`[${code}] ${message}`, { url, status: response.status, contentType, preview: safeBodySample });
+              }
+
+              // A SPA fallback can return HTTP 200 with index.html. Never expose that
+              // as a successful API response; convert it to a server-side failure status.
+              const normalizedStatus = response.ok ? 502 : response.status;
+
+              return new Response(JSON.stringify({
+                success: false,
+                code,
+                error: {
+                  code,
+                  message,
+                  url: path,
+                  status: response.status,
+                  contentType: contentType || 'unknown',
+                  bodyPreview: safeBodySample,
+                },
+                originalStatus: response.status,
+              }), {
+                status: normalizedStatus,
+                statusText: normalizedStatus === response.status ? response.statusText : 'Bad Gateway',
+                headers: {
+                  'Content-Type': 'application/json; charset=utf-8',
+                  'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+                  'X-Content-Type-Options': 'nosniff',
+                  'X-API-Normalized-Error': 'true',
+                  'X-API-Original-Status': String(response.status),
+                },
+              });
+            }
           }
 
-          const isHtml = contentType.includes('text/html') ||
-            contentType.includes('application/xhtml+xml') ||
-            /^<!doctype\s+html/i.test(bodyPreview) ||
-            /^<html[\s>]/i.test(bodyPreview);
+          return response;
+        } catch (err: any) {
+          lastError = err;
+          if (timedOut) {
+            const timeoutError = new Error(`Request to ${path} timed out after ${Math.round(timeoutMs / 1000)}s. Please retry.`);
+            (timeoutError as any).code = 'TIMEOUT';
+            (timeoutError as any).status = 408;
+            throw timeoutError;
+          }
+          if (err?.name === 'AbortError' && !options.signal?.aborted) {
+            const abortError = new Error(`Request to ${path} was interrupted or timed out. Please retry.`);
+            (abortError as any).code = 'ABORT_ERROR';
+            throw abortError;
+          }
 
-          const code = isHtml ? 'API_HTML_RESPONSE' : 'API_NON_JSON_RESPONSE';
-          const method = (fetchOpts.method || 'GET').toUpperCase();
-          const safeBodySample = bodyPreview.slice(0, 120).replace(/\s+/g, ' ');
-          const message = isHtml
-            ? `API endpoint ${method} ${path} returned HTML instead of JSON (HTTP ${response.status}, Content-Type: ${contentType || 'unknown'}). Expected application/json. The request likely reached an SPA/static fallback instead of the Express API.`
-            : `API endpoint ${method} ${path} returned a non-JSON response (HTTP ${response.status}, Content-Type: ${contentType || 'unknown'}).`;
-
-          console.error(`[${code}] ${message}`, { url, status: response.status, contentType, preview: safeBodySample });
-
-          // A SPA fallback can return HTTP 200 with index.html. Never expose that
-          // as a successful API response; convert it to a server-side failure status.
-          const normalizedStatus = response.ok ? 502 : response.status;
-
-          return new Response(JSON.stringify({
-            success: false,
-            code,
-            error: {
-              code,
-              message,
-              url: path,
-              status: response.status,
-              contentType: contentType || 'unknown',
-              bodyPreview: safeBodySample,
-            },
-            originalStatus: response.status,
-          }), {
-            status: normalizedStatus,
-            statusText: normalizedStatus === response.status ? response.statusText : 'Bad Gateway',
-            headers: {
-              'Content-Type': 'application/json; charset=utf-8',
-              'Cache-Control': 'no-store, no-cache, must-revalidate, private',
-              'X-Content-Type-Options': 'nosniff',
-              'X-API-Normalized-Error': 'true',
-              'X-API-Original-Status': String(response.status),
-            },
-          });
+          if (attempts < maxAttempts) {
+            await new Promise((res) => setTimeout(res, attempts * 400));
+          }
         }
       }
 
-      return response;
-    } catch (err: any) {
-      if (timedOut) {
-        const timeoutError = new Error(`Request to ${path} timed out after ${Math.round(timeoutMs / 1000)}s. Please retry.`);
-        (timeoutError as any).code = 'TIMEOUT';
-        (timeoutError as any).status = 408;
-        throw timeoutError;
+      // Network error normalization for /api calls after retries fail
+      if (path === '/api' || path.startsWith('/api/')) {
+        console.warn(`[NETWORK_ERROR] Unable to fetch ${path}: ${lastError?.message || lastError}`);
+        return new Response(JSON.stringify({
+          success: false,
+          code: 'NETWORK_ERROR',
+          error: {
+            code: 'NETWORK_ERROR',
+            message: `Network request to ${path} failed: ${lastError?.message || 'Unable to reach server'}.`,
+            url: path,
+          },
+        }), {
+          status: 503,
+          statusText: 'Service Unavailable',
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+            'X-API-Normalized-Error': 'true',
+          },
+        });
       }
-      if (err?.name === 'AbortError' && !options.signal?.aborted) {
-        const abortError = new Error(`Request to ${path} was interrupted or timed out. Please retry.`);
-        (abortError as any).code = 'ABORT_ERROR';
-        throw abortError;
-      }
-      throw err;
+
+      throw lastError;
     } finally {
       clearTimeout(timeoutId);
       if (options.signal && onExternalAbort) {

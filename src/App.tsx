@@ -157,6 +157,12 @@ export default function App() {
 
   const loadUserSettings = async () => {
     try {
+      const cached = AppCache.get('user_settings');
+      if (cached) {
+        setActiveProvider('platform-router');
+        setActiveModel('Intelligent Router');
+      }
+
       const res = await authedFetch('/api/settings');
       const contentType = res.headers.get('content-type') || '';
       if (res.ok && contentType.includes('application/json')) {
@@ -175,7 +181,7 @@ export default function App() {
         console.warn('[SETTINGS] Response not ok:', res.status);
       }
     } catch (err) {
-      console.error('Failed to load user settings', err);
+      console.warn('[SETTINGS] Unable to fetch user settings, using cached or default settings:', err);
     }
   };
 
@@ -197,7 +203,7 @@ export default function App() {
         console.warn('[PROJECTS] Response not ok:', res.status);
       }
     } catch (err) {
-      console.error('Failed to load projects', err);
+      console.warn('[PROJECTS] Unable to fetch projects, using cached projects if available:', err);
     } finally {
       setIsProjectsLoading(false);
     }
@@ -528,36 +534,102 @@ export default function App() {
 
       // Ensure complete enterprise workspace structure (docs, scripts, tests, reports)
       const workspaceMgr = WorkspaceManager.getInstance();
-      const completeFiles = workspaceMgr.ensureCompleteProjectStructure(config.name, aiGenerated.files || []);
+      const completeFiles = workspaceMgr.ensureCompleteProjectStructure(
+        config.name,
+        aiGenerated.files || [],
+        config.blockchain,
+        config.framework,
+        config.language
+      );
 
-      const createRes = await authedFetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      let newProj: Project;
+      try {
+        const createRes = await authedFetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: config.name,
+            description: aiGenerated.description || config.description,
+            blockchain: config.blockchain,
+            language: config.language,
+            framework: config.framework,
+            contractType: config.contractType,
+            files: completeFiles
+          })
+        });
+
+        if (createRes.ok) {
+          newProj = await createRes.json();
+        } else {
+          let errDetail = 'Server project storage warning';
+          try {
+            const errJson = await createRes.json();
+            if (errJson?.error) errDetail = typeof errJson.error === 'string' ? errJson.error : JSON.stringify(errJson.error);
+          } catch {}
+          console.warn('[PROJECTS] Project API response not ok:', errDetail);
+          newProj = {
+            id: `proj-${Date.now()}`,
+            userId: user?.uid || user?.id || 'guest',
+            name: config.name,
+            description: aiGenerated.description || config.description || '',
+            blockchain: config.blockchain,
+            language: config.language,
+            framework: config.framework,
+            contractType: config.contractType || 'Custom Contract',
+            files: completeFiles,
+            activeFilePath: completeFiles[0]?.path || '',
+            audit: aiGenerated.audit,
+            versions: [{
+              id: `v-${Date.now()}`,
+              timestamp: new Date().toISOString(),
+              prompt: config.prompt || 'Initial Creation',
+              files: completeFiles,
+              summary: 'Initial project generation'
+            }],
+            deployments: [],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+        }
+      } catch (postErr: any) {
+        console.warn('[PROJECTS] Network error during project creation:', postErr);
+        newProj = {
+          id: `proj-${Date.now()}`,
+          userId: user?.uid || user?.id || 'guest',
           name: config.name,
-          description: aiGenerated.description || config.description,
+          description: aiGenerated.description || config.description || '',
           blockchain: config.blockchain,
           language: config.language,
           framework: config.framework,
-          contractType: config.contractType,
-          files: completeFiles
-        })
-      });
-
-      if (!createRes.ok) {
-        throw new Error('Failed to create project record in DB');
+          contractType: config.contractType || 'Custom Contract',
+          files: completeFiles,
+          activeFilePath: completeFiles[0]?.path || '',
+          audit: aiGenerated.audit,
+          versions: [{
+            id: `v-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            prompt: config.prompt || 'Initial Creation',
+            files: completeFiles,
+            summary: 'Initial project generation'
+          }],
+          deployments: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
       }
-
-      const newProj = await createRes.json();
       
       if (aiGenerated.audit) {
-        const auditedProj = { ...newProj, audit: aiGenerated.audit };
-        await authedFetch(`/api/projects/${newProj.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(auditedProj)
-        });
         newProj.audit = aiGenerated.audit;
+        try {
+          const auditedProj = { ...newProj, audit: aiGenerated.audit };
+          await authedFetch(`/api/projects/${newProj.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(auditedProj)
+          });
+        } catch (auditPutErr) {
+          console.warn('[PROJECTS] Audit update sync notice:', auditPutErr);
+        }
       }
 
       setProjects((prev) => [...prev, newProj]);

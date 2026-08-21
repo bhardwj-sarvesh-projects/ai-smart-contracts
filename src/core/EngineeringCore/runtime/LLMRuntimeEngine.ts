@@ -258,6 +258,8 @@ export class LLMRuntimeEngine {
           requiredSyntax = '\nMust contain anchor_lang or valid Rust definitions.';
         } else if (ext === 'move') {
           requiredSyntax = '\nFirst line MUST begin with module.';
+        } else if (ext === 'html') {
+          requiredSyntax = '\nFirst line MUST begin with <!DOCTYPE html> or <html>.';
         }
 
         retrySystemInstruction += `\nRETRY INSTRUCTION (Attempt 2): Generate ONLY ${targetPath}.\nReturn RAW source code only.\nNo markdown.\nNo explanations.${requiredSyntax}\n[CRITICAL SYSTEM RULE]: Return ONLY the raw, executable, un-wrapped file source content text. Do NOT use markdown code fences (\`\`\`). Do NOT include introductory greetings or conversational sign-offs. Start your response text directly with the code syntax.`;
@@ -396,11 +398,23 @@ ${firstFiveLines}`);
         const isRateLimit = !isContextBudget && (err.status === 429 || err.isTerminal || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate exceeded") || msg.includes("rate_limit_exceeded") || msg.includes("too many requests") || msg.includes("tpd") || msg.includes("tpm") || msg.includes("rpm") || msg.includes("quota exceeded") || msg.includes("insufficient quota") || msg.includes("insufficient credits"));
         const isAuth = err.status === 401 || err.status === 403 || err.status === 402 || msg.includes("401") || msg.includes("403") || msg.includes("402") || msg.includes("invalid_api_key") || msg.includes("unauthorized");
 
+        if (isAuth) {
+          console.log(`[LLM RUNTIME] Authentication failure detected. Bypassing retries.`);
+          throw err;
+        }
+
+        const rawRetryMs = err.retryAfterMs || TokenBudgetEngine.extractRetryAfter(err.message || String(err));
+        const retryDelayMs = typeof rawRetryMs === 'number' ? rawRetryMs : TokenBudgetEngine.parseDurationToMs(rawRetryMs);
+
         if (isContextBudget) {
           console.log(`[LLM RUNTIME] Provider context/TPM budget reached; compacting workspace context before retry.`);
-        } else if (isRateLimit || isAuth) {
-          console.log(`[LLM RUNTIME] Terminal rate limit or auth error detected. Bypassing all retries and failing immediately.`);
-          throw err;
+        } else if (isRateLimit) {
+          if (retryDelayMs > 25_000 || attempts >= maxRetries) {
+            console.log(`[LLM RUNTIME] Rate limit cooldown is excessive (${retryDelayMs}ms) or retries exhausted.`);
+            throw err;
+          }
+          console.log(`[LLM RUNTIME] Temporary rate limit encountered. Pausing ${Math.max(1000, retryDelayMs || 4000)}ms before retry ${attempts + 1}/${maxRetries}...`);
+          await new Promise(resolve => setTimeout(resolve, Math.max(1000, retryDelayMs || 4000)));
         }
         
         console.log(`[RETRY ENGINE LOG] file: "${targetPath}" | attempt: ${attempts}/3 | validation stage: "LLM_VALIDATION" | provider: "${providerKey}" | promptTokens: ${promptTokens} | completionTokens: 0 | failure reason: "${err.message || String(err)}" | retry duration: ${executionTime}ms`);

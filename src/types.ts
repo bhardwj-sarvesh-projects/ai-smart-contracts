@@ -89,6 +89,9 @@ export interface DeploymentHistory {
 
 export interface Project {
   id: string;
+  userId?: string;
+  userEmail?: string;
+  userName?: string;
   name: string;
   description: string;
   blockchain: string;
@@ -101,6 +104,7 @@ export interface Project {
   audit?: AuditResult;
   deployments: DeploymentHistory[];
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface BlockchainConfig {

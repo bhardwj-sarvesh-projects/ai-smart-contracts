@@ -648,7 +648,17 @@ ${overallScore >= 90 ? 'Project meets or exceeds all enterprise client delivery 
       docResult.certifiedFiles,
       projectName,
       projectName,
-      blockchain
+      blockchain,
+      framework,
+      {
+        compilationResult: compilation.result,
+        testingResult: testingResult,
+        securityAuditResult: security.auditResult,
+        dependencyResult: dependency.result,
+        architectureResult: archResult,
+        documentationResult: docResult,
+        deploymentResult: depCheck,
+      }
     );
     const exportPass = exportResult.exportCertified;
 
@@ -657,7 +667,18 @@ ${overallScore >= 90 ? 'Project meets or exceeds all enterprise client delivery 
       exportResult.exportedFiles,
       projectName,
       projectName,
-      blockchain
+      blockchain,
+      {
+        framework,
+        compilationResult: compilation.result,
+        testingResult: testingResult,
+        securityAuditResult: security.auditResult,
+        dependencyResult: dependency.result,
+        architectureResult: archResult,
+        documentationResult: docResult,
+        deploymentResult: depCheck,
+        exportResult: exportResult,
+      }
     );
     const certPass = certResult.isCertified;
 
@@ -846,14 +867,14 @@ contract ${options.projectName} is Ownable, ReentrancyGuard {
       aiExecutor: options.aiExecutor
     });
 
-    // 7. Certify Client Delivery Standard across all 6 validation engines
-    const deliveryResult = this.evaluateClientDeliveryReady(structuredProject.files, options.projectName, {
-      blockchain,
-      framework,
-      language
-    });
-
-    structuredProject.files = deliveryResult.certifiedFiles;
+    // 7. Calculate Quality Score and attach QUALITY_REPORT.md
+    const quality = this.calculateQualityScore(structuredProject.files, options.projectName);
+    const qIdx = structuredProject.files.findIndex(f => f.path === 'QUALITY_REPORT.md');
+    if (qIdx >= 0) {
+      structuredProject.files[qIdx] = { path: 'QUALITY_REPORT.md', content: quality.reportMarkdown, language: 'markdown' };
+    } else {
+      structuredProject.files.push({ path: 'QUALITY_REPORT.md', content: quality.reportMarkdown, language: 'markdown' });
+    }
 
     return structuredProject;
   }

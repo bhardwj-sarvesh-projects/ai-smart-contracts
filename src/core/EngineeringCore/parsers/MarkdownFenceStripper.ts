@@ -95,6 +95,10 @@ export class MarkdownFenceStripper {
       break;
     }
 
-    return lines.slice(startIdx, endIdx).join('\n').trim();
+    let result = lines.slice(startIdx, endIdx).join('\n').trim();
+    if (!isMarkdownFile) {
+      result = result.split('\n').filter(line => !/^\s*```[a-zA-Z0-9_\-+#]*\s*$/.test(line)).join('\n').trim();
+    }
+    return result;
   }
 }

@@ -1,14 +1,20 @@
 import { ProjectFile } from '../../../types';
 import { PatchEngine } from '../patch/PatchEngine';
-import module from 'module';
+import { sha256 } from '../utils/cryptoFallback';
+import { getNodeRequire } from '../utils/nodeRequire';
 
 // Safe dynamic require helper to bypass browser bundle static analysis
-const requireFn = typeof window === 'undefined' ? (typeof require !== 'undefined' ? require : module.createRequire(import.meta.url)) : null;
+const requireFn = getNodeRequire();
 const fs = requireFn ? requireFn('fs') : null;
 const path = requireFn ? requireFn('path') : null;
 const os = requireFn ? requireFn('os') : null;
 const spawnSync = requireFn ? requireFn('child_process').spawnSync : null;
-const crypto = requireFn ? requireFn('crypto') : null;
+// NOTE: Node's `crypto` module is intentionally NOT required here anymore.
+// certifyCompilation() runs in both server (Node) and client (browser)
+// contexts, and workspace-hash evidence must never depend on a Node-only
+// API. `sha256()` (../utils/cryptoFallback) is a pure-JS implementation
+// that works identically in both runtimes, so hashing can never throw
+// CRYPTO_UNAVAILABLE regardless of where this engine executes.
 
 export type CompilerType =
   | 'solc'
@@ -93,8 +99,7 @@ export class CompilerEngine {
   public static spawnSyncFn = spawnSync;
 
   private static computeSha256(content: string): string {
-    if (!crypto) throw new Error('CRYPTO_UNAVAILABLE: SHA-256 evidence cannot be produced in this runtime.');
-    return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+    return sha256(content);
   }
 
   /**
@@ -505,8 +510,18 @@ export class CompilerEngine {
     const filesToHash = files.map(f => `${f.path}:${this.computeSha256(f.content)}`).sort().join('\n');
     const workspaceHash = this.computeSha256(filesToHash);
 
-    const tmpBase = os && os.tmpdir ? os.tmpdir() : process.cwd();
-    const workspacePath = path ? path.resolve(tmpBase, 'compiler_workspace_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7)) : 'N/A';
+    // `process` is a Node global and does not exist in the browser bundle.
+    // Referencing it unconditionally (the previous behavior) threw
+    // `ReferenceError: process is not defined` the instant this function
+    // ran client-side -- immediately after the crypto fix above, this was
+    // the *next* latent crash in the same call. `typeof process !== 'undefined'`
+    // is safe to evaluate even when `process` was never declared.
+    const tmpBase = (os && os.tmpdir)
+      ? os.tmpdir()
+      : (typeof process !== 'undefined' && process.cwd ? process.cwd() : '/tmp');
+    const workspacePath = path
+      ? path.resolve(tmpBase, 'compiler_workspace_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7))
+      : 'N/A';
 
     let isAvailable = false;
     let binary = '';

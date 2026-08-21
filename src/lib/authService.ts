@@ -2,6 +2,7 @@ import { supabase, isSupabaseConfigured } from './supabase';
 
 export interface UserProfile {
   uid: string;
+  id?: string;
   fullName: string;
   email: string;
   role: string;

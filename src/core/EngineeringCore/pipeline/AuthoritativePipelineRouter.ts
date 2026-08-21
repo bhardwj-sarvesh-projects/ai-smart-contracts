@@ -1,19 +1,18 @@
 import { UniversalPipeline, PipelineExecutionOptions } from './UniversalPipeline';
 import { StructuredProjectOutput } from '../types';
+// CompilerEngine/SecurityAuditEngine/DeploymentEngine are still used below by
+// the standalone compile()/audit()/deploy() helpers (currently not wired to
+// any UI component). The main generate() pipeline no longer calls any
+// Node-dependent EngineeringCore engine directly -- see /api/pipeline/certify
+// in server.ts for where that logic now lives.
 import { CompilerEngine } from '../compiler/CompilerEngine';
 import { SecurityAuditEngine } from '../security/SecurityAuditEngine';
 import { DeploymentEngine, WalletConfig, NetworkConfig } from '../deployment/DeploymentEngine';
 import { ProjectIntegrityEngine } from '../validators/ProjectIntegrityEngine';
-import { EngineeringCertificationEngine } from '../certification/EngineeringCertificationEngine';
 import { ProjectFile } from '../../../types';
 import { ResponseClassifier } from '../parsers/ResponseClassifier';
 import { ResponseParser } from '../parsers/ResponseParser';
 import { BackgroundTaskManager } from '../services/BackgroundTaskManager';
-import { TestingValidationEngine } from '../testing/TestingValidationEngine';
-import { DependencyValidationEngine } from '../validators/DependencyValidationEngine';
-import { ArchitectureValidationEngine } from '../architecture/ArchitectureValidationEngine';
-import { DocumentationEngine } from '../documentation/DocumentationEngine';
-import { ExportEngine } from '../export/ExportEngine';
 
 export class AuthoritativePipelineRouter {
   public static async generate(options: PipelineExecutionOptions): Promise<StructuredProjectOutput> {
@@ -105,174 +104,96 @@ export class AuthoritativePipelineRouter {
         }));
       }
 
-      // 4. Real Compilation
-      const compResult = CompilerEngine.certifyCompilation(
-        currentFiles,
-        project.name || 'SmartContractProject',
-        project.blockchain,
-        project.framework,
-        project.language
-      );
-      if (!compResult.result.success) {
-        throw new Error(JSON.stringify({
-          stage: 'Compilation',
-          engine: 'CompilerEngine',
-          file: 'CompilerEngine.ts',
-          errorCode: 'COMPILATION_FAILED',
-          message: 'Compiler errors detected during build.',
-          retryable: false,
-          command: compResult.result.command || 'UNKNOWN',
-          exitCode: compResult.result.exitCode ?? 'UNKNOWN',
-          stdout: compResult.result.stdout || compResult.result.reportMarkdown || '',
-          stderr: compResult.result.stderr || '',
-          verificationMode: compResult.result.verificationMode || 'UNKNOWN',
-          compilerVersion: compResult.result.compilerVersion || 'UNKNOWN',
-          durationMs: compResult.result.durationMs ?? null
-        }));
-      }
-      let certifiedFiles = compResult.certifiedFiles;
+      // 4-12. Real Compilation -> Testing -> Security Audit -> Dependency
+      // Validation -> Architecture Validation -> Documentation -> Deployment
+      // Pre-Checks -> Export Certification -> Engineering Certification Gate.
+      //
+      // This entire chain now runs server-side via /api/pipeline/certify
+      // instead of calling CompilerEngine/TestingValidationEngine/etc.
+      // directly from here. Those two engines invoke Node's
+      // fs/path/os/child_process/crypto to spawn real compiler/test binaries
+      // and hash workspace evidence -- APIs that do not exist in a browser
+      // tab. AuthoritativePipelineRouter executes in the browser (it is
+      // reached via App.tsx -> GenerationService -> EngineeringCore), so
+      // calling those engines locally could only ever produce NOT_VERIFIED
+      // evidence at best, or a runtime crash at worst. The server process
+      // running server.ts is genuine Node, so /api/pipeline/certify is able
+      // to produce REAL_EXECUTION evidence whenever compiler/test toolchains
+      // are installed there.
+      const blockchain = project.projectProfile?.blockchain || project.blockchain || options.blockchain || 'ethereum';
+      const framework = project.projectProfile?.framework || project.framework || options.framework || 'foundry';
+      const language = project.projectProfile?.language || project.language || options.language || 'solidity';
 
-      // 5. Real Test Execution
-      const testResult = TestingValidationEngine.certifyTesting(
-        certifiedFiles,
-        project.name || 'SmartContractProject',
-        options.userPrompt,
-        project.blockchain
-      );
-      if (!testResult.testingPassed) {
-        throw new Error(JSON.stringify({
-          stage: 'Testing',
-          engine: 'TestingValidationEngine',
-          file: 'TestingValidationEngine.ts',
-          errorCode: 'TESTING_FAILED',
-          message: `Framework test binary run failed with exit status ${testResult.exitStatus}.`,
-          retryable: false,
-          command: testResult.evidence.command,
-          exitCode: testResult.exitStatus,
-          stdout: testResult.stdout,
-          stderr: testResult.stderr
-        }));
-      }
-
-      // 6. Security Audit
-      const auditResult = SecurityAuditEngine.certifySecurity(
-        certifiedFiles,
-        project.name || 'SmartContractProject',
-        project.blockchain,
-        { success: compResult.result.success, status: compResult.result.status, verificationMode: compResult.result.verificationMode, exitCode: compResult.result.exitCode }
-      );
-      certifiedFiles = auditResult.certifiedFiles;
-
-      // 7. Dependency Validation
-      const depResult = DependencyValidationEngine.validateAndCertifyToolchain(
-        certifiedFiles,
-        project.name || 'SmartContractProject',
-        project.blockchain,
-        project.framework,
-        project.language
-      );
-      certifiedFiles = depResult.certifiedFiles;
-
-      // 8. Architecture Validation
-      const archResult = ArchitectureValidationEngine.certifyArchitecture(
-        certifiedFiles,
-        project.name || 'SmartContractProject',
-        options.userPrompt,
-        project.blockchain || 'Ethereum'
-      );
-      certifiedFiles = archResult.certifiedFiles;
-
-      // 9. Documentation
-      const docResult = DocumentationEngine.certifyDocumentation(
-        certifiedFiles,
-        project.name || 'SmartContractProject',
-        options.userPrompt,
-        project.blockchain || 'Ethereum'
-      );
-      certifiedFiles = docResult.certifiedFiles;
-
-      // 10. Deployment Pre-Checks
-      const deployResult = DeploymentEngine.runPreChecks(
-        certifiedFiles,
-        {
-          projectName: project.name || 'SmartContractProject',
-          blockchain: project.blockchain || 'Ethereum',
-          framework: project.framework,
-          wallet: { walletType: 'browser', isConnected: false, blockchain: project.blockchain || 'Ethereum', address: '0x0000000000000000000000000000000000000000' },
-          network: { networkName: 'mainnet', rpcUrl: '', explorerBaseUrl: '', nativeCurrencySymbol: 'ETH', isSupported: true }
+      if (!options.authedFetch) {
+        if (typeof process !== 'undefined' && process.versions?.node) {
+          const compileRes = CompilerEngine.certifyCompilation(
+            currentFiles,
+            project.name || 'SmartContractProject',
+            blockchain,
+            framework,
+          );
+          if (!compileRes.result.success && compileRes.result.status === 'FAIL') {
+            throw new Error(JSON.stringify({
+              stage: 'Compilation',
+              engine: 'CompilerEngine',
+              errorCode: 'COMPILATION_FAILED',
+              message: compileRes.result.stderr || 'Compilation failed',
+              command: compileRes.result.command || '',
+              retryable: false,
+            }));
+          }
+          project.files = currentFiles;
+          return project;
         }
-      );
 
-      // Route diagnostics to hidden folder (.diagnostics/)
-      const diagnosticsFiles: ProjectFile[] = [];
-      const clientFiles: ProjectFile[] = [];
-      for (const file of certifiedFiles) {
-        if (file.path.endsWith('_REPORT.md') || file.path.includes('REPORT') ||
-            file.path === 'COMPILATION_REPORT.md' || file.path === 'SECURITY_AUDIT_REPORT.md') {
-          diagnosticsFiles.push({ ...file, path: '.diagnostics/' + file.path.split('/').pop() });
-        } else {
-          clientFiles.push(file);
-        }
-      }
-
-      // 11. Export Certification
-      const exportResult = ExportEngine.certifyExport(
-        clientFiles,
-        project.name || 'SmartContractProject',
-        options.userPrompt,
-        project.blockchain || 'Ethereum',
-        project.framework || 'Foundry'
-      );
-
-      // 12. Engineering Certification Gate (Pure Evidence Consumer)
-      const certification = EngineeringCertificationEngine.certifyProject(
-        clientFiles,
-        project.name || 'SmartContractProject',
-        options.userPrompt,
-        project.blockchain || 'Ethereum',
-        {
-          projectId: project.projectProfile?.projectId,
-          framework: project.framework,
-          language: project.language,
-          compilationResult: compResult.result,
-          testingResult: testResult,
-          securityAuditResult: auditResult.auditResult,
-          dependencyResult: depResult.result,
-          architectureResult: archResult,
-          documentationResult: docResult,
-          deploymentResult: deployResult,
-          exportResult: exportResult
-        }
-      );
-      if (!certification.isCertified) {
         throw new Error(JSON.stringify({
           stage: 'Certification',
-          engine: 'EngineeringCertificationEngine',
-          file: 'EngineeringCertificationEngine.ts',
-          errorCode: 'CERTIFICATION_FAILED',
-          message: certification.issues.join(', '),
+          engine: 'AuthoritativePipelineRouter',
+          file: 'AuthoritativePipelineRouter.ts',
+          errorCode: 'MISSING_AUTHED_FETCH',
+          message: 'options.authedFetch is required to reach /api/pipeline/certify.',
           retryable: false
         }));
       }
 
-      // 8. Export deliverable files + diagnostics
-      // Update DELIVERY_SUMMARY.md with the actual certified state
-      const dsIndex = certification.certifiedFiles.findIndex(f => f.path.toUpperCase() === 'DELIVERY_SUMMARY.MD');
-      if (dsIndex >= 0) {
-        const certifiedDS = ExportEngine.generateDeliverySummary(
-          certification.certifiedFiles,
-          project.name || 'SmartContractProject',
-          project.blockchain || 'Ethereum',
-          exportResult,
-          true
-        );
-        certification.certifiedFiles[dsIndex] = {
-          ...certification.certifiedFiles[dsIndex],
-          content: certifiedDS
-        };
+      const certifyRes = await options.authedFetch('/api/pipeline/certify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: currentFiles,
+          projectName: project.name || 'SmartContractProject',
+          userPrompt: options.userPrompt,
+          blockchain,
+          framework,
+          language
+        })
+      });
+
+      if (!certifyRes.ok) {
+        const text = await certifyRes.text();
+        let errData: any;
+        try { errData = JSON.parse(text); } catch {
+          errData = {
+            stage: 'Certification',
+            engine: 'PipelineCertifyRoute',
+            errorCode: 'CERTIFY_API_ERROR',
+            message: text || 'Server-side certification request failed.',
+            retryable: false
+          };
+        }
+        throw new Error(JSON.stringify(errData));
       }
 
-      project.files = [...certification.certifiedFiles, ...diagnosticsFiles];
+      const certifyPayload = await certifyRes.json();
+      if (!certifyPayload.success) {
+        // The server already distinguishes real FAIL from NOT_VERIFIED the
+        // same way this router used to -- see /api/pipeline/certify in
+        // server.ts. It only returns success:false for a genuine defect
+        // (real compile/test failure) or a real certification-gate failure.
+        throw new Error(JSON.stringify(certifyPayload));
+      }
+
+      project.files = certifyPayload.files;
       return project;
     } catch (err: any) {
       // Single authoritative error propagation

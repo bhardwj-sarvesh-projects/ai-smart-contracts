@@ -1,8 +1,8 @@
 import { RegressionPlatform, RegressionPlatformResult } from './RegressionPlatform';
-import module from 'module';
+import { getNodeRequire } from '../utils/nodeRequire';
 
 // Safe dynamic require helper to bypass browser bundle static analysis
-const requireFn = typeof window === 'undefined' ? module.createRequire(import.meta.url) : null;
+const requireFn = getNodeRequire();
 const fs = requireFn ? requireFn('fs') : null;
 const path = requireFn ? requireFn('path') : null;
 

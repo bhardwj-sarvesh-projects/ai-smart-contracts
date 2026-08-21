@@ -36,6 +36,15 @@ export interface PipelineExecutionOptions {
   existingFiles?: Array<{ path: string; content: string; language: string }>;
   aiExecutor: (systemInstruction: string, prompt: string) => Promise<string>;
   onStepProgress?: (step: string) => void;
+  /**
+   * Authenticated fetch used by AuthoritativePipelineRouter to call the
+   * server-side /api/pipeline/certify endpoint (real compile/test/security/
+   * certification evidence). Required in browser contexts -- the pipeline no
+   * longer runs CompilerEngine/TestingValidationEngine/etc. directly in the
+   * browser, since those engines depend on Node-only APIs that don't exist
+   * client-side.
+   */
+  authedFetch?: (url: string, options?: any) => Promise<any>;
 }
 
 export class UniversalPipeline {

@@ -147,7 +147,7 @@ export class GroqProvider implements AIProvider {
               error?.headers || error?.response?.headers,
             ),
           ),
-          retryable: Number(error?.status) >= 500,
+          retryable: Number(error?.status) >= 500 || Number(error?.status) === 429,
         }),
       );
 

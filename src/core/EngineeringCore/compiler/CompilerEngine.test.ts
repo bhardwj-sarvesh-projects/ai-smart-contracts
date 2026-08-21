@@ -1,7 +1,7 @@
 import { describe, it } from 'vitest';
 import { CompilerEngine } from './CompilerEngine';
 import { ProjectFile } from '../../../types';
-import module from 'module';
+import { getNodeRequire } from '../utils/nodeRequire';
 
 describe('CompilerEngine', () => {
   it('runs compiler engine tests', async () => {
@@ -9,7 +9,7 @@ describe('CompilerEngine', () => {
   });
 });
 
-const requireFn = typeof window === 'undefined' ? module.createRequire(import.meta.url) : null;
+const requireFn = getNodeRequire();
 const crypto = requireFn ? requireFn('crypto') : null;
 
 function computeSha256(content: string): string {

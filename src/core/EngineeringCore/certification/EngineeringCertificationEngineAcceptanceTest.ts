@@ -1,5 +1,6 @@
 import { ProjectFile } from '../../../types';
 import { EngineeringCertificationEngine, EngineeringCertificationResult } from './EngineeringCertificationEngine';
+import { ExportEngine } from '../export/ExportEngine';
 
 export interface CertificationBenchmarkResult {
   benchmarkName: string;
@@ -617,16 +618,19 @@ pub mod anchor_escrow {
       const mockEvidence: any = {
         compilationResult: { status: 'PASS' as const, verificationMode: 'REAL_EXECUTION' as const, exitCode: 0, language: 'Solidity', compilerVersion: '0.8.20', durationMs: 100, stdout: 'OK', stderr: '', result: { success: true, errors: [], warnings: [], contracts: [] } },
         testingResult: { status: 'PASS' as const, testingPassed: true, verificationMode: 'REAL_EXECUTION' as const, exitStatus: 0, metrics: { testFilesDiscovered: 1, totalTestsDiscovered: 1, testsExecuted: '1', testsPassed: '1', testsFailed: '0' }, stdout: 'OK', stderr: '', evidence: { testRunner: 'forge', durationMs: 100, command: 'forge test' }, issues: [] },
-        securityAuditResult: { isAudited: true, overallStatus: 'PASS' as const, criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0, findings: [], analysisTimestamp: new Date().toISOString() },
+        securityAuditResult: { isAudited: true, overallStatus: 'PASS' as const, status: 'CERTIFIED_SECURE' as const, criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0, findings: [], analysisTimestamp: new Date().toISOString(), reportMarkdown: 'SEC' },
         dependencyResult: { overallStatus: 'PASS' as const, projectName, checks: [], warnings: [], errors: [] },
         architectureResult: { isValid: true, status: 'PASS' as const, architecturePassed: true, coverageScore: 100, mappedRequirementsCount: 1, missingRequirementsCount: 0, details: 'OK', requirements: { actors: [] }, comparison: {}, scoreBreakdown: {}, reportMarkdown: 'OK' },
         documentationResult: { passed: true, status: 'PASS' as const, documentationPassed: true, documentationCertified: true, reportMarkdown: 'OK', certifiedFiles: bm.codeFiles, presentDocs: ['README.md'] },
-        deploymentResult: { passed: true, canDeploy: true, status: 'PASS' as const, deploymentId: 'DEP-1234', state: 'COMPLETED', reportMarkdown: 'OK' },
-        exportResult: { exportCertified: true, exportedFiles: bm.codeFiles, manifestJson: '{}', checksumsTxt: 'hash123', deliverySummaryMd: '', versionTxt: '1.0', reportsPresentCount: 0, docsPresentCount: 1, diagramsPresentCount: 0, validationGatesPassed: { workspace: true, integrity: true, dependencies: true, compiler: true, security: true, deployment: true, architecture: true, testing: true, documentation: true }, issues: [], status: 'PASS' }
+        deploymentResult: { passed: true, canDeploy: true, status: 'PASS' as const, deploymentId: 'DEP-1234', state: 'COMPLETED', reportMarkdown: 'OK' }
       };
 
+      const exportRes = ExportEngine.certifyExport(bm.codeFiles, projectName, bm.prompt, bm.blockchain, 'foundry', mockEvidence);
+      mockEvidence.exportResult = exportRes;
+      mockEvidence.documentationResult.certifiedFiles = exportRes.exportedFiles;
+
       const certResult: EngineeringCertificationResult = EngineeringCertificationEngine.certifyProject(
-        bm.codeFiles,
+        exportRes.exportedFiles,
         projectName,
         bm.prompt,
         bm.blockchain,

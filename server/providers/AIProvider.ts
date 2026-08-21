@@ -20,6 +20,7 @@ export interface RequestOptions {
   maxTokens?: number;
   targetPath?: string;
   routeAttempt?: number;
+  skipInternalRetry?: boolean;
 }
 
 export interface AIProvider {

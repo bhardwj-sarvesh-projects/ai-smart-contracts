@@ -68,17 +68,18 @@ export default function AdminDashboard({ theme, authedFetch, onClose, showToast 
   const readAdminError = async (response: Response): Promise<Error> => {
     let payload: any = null;
     const contentType = response.headers.get('content-type') || '';
-    if (contentType.includes('text/html')) {
-      const error = new Error(`The API endpoint returned HTML instead of JSON (HTTP ${response.status}).`);
-      (error as any).status = response.status;
-      (error as any).code = 'API_HTML_RESPONSE';
-      return error;
-    }
 
     try {
       payload = await response.json();
     } catch {
       // JSON parsing failure
+    }
+
+    if (contentType.includes('text/html') && response.status !== 401 && response.status !== 403) {
+      const error = new Error(`The API endpoint returned HTML instead of JSON (HTTP ${response.status}).`);
+      (error as any).status = response.status;
+      (error as any).code = 'API_HTML_RESPONSE';
+      return error;
     }
 
     const message =

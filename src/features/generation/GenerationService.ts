@@ -73,6 +73,7 @@ export class GenerationService {
             statusCode: errorObj.statusCode || res.status,
             retryable: errorObj.retryable,
             retryAfter: errorObj.retryAfter,
+            retryAfterMs: errorObj.retryAfterMs,
             provider: errorObj.provider,
             model: errorObj.model,
             stage: errorObj.stage,
@@ -95,6 +96,7 @@ export class GenerationService {
       language: options.language,
       framework: options.framework,
       aiExecutor,
+      authedFetch: options.authedFetch,
     });
   }
 }

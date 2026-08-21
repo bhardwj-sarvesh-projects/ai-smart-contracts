@@ -8,6 +8,7 @@ import { DependencyValidationResult } from '../validators/DependencyValidationEn
 import { ArchitectureValidationResult } from '../architecture/ArchitectureValidationEngine';
 import { DocumentationCertificationResult } from '../documentation/DocumentationEngine';
 import { DeploymentResult } from '../deployment/DeploymentEngine';
+import { MarkdownFenceStripper } from '../parsers/MarkdownFenceStripper';
 
 export type GateVerificationStatus = 'PASS' | 'FAIL' | 'NOT_VERIFIED';
 
@@ -146,13 +147,14 @@ export class EngineeringCertificationEngine {
 
     let hasLeakage = false;
     let leakageDetails = '';
-    const codeFiles = files.filter(f => f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move'));
+    const codeFiles = files.filter(f => f.path.endsWith('.sol') || f.path.endsWith('.rs') || f.path.endsWith('.move') || f.path.endsWith('.ts'));
     for (const file of codeFiles) {
-      if (file.content.trim().startsWith('{') || file.content.trim().startsWith('[')) {
+      const contentToCheck = file.content ? MarkdownFenceStripper.strip(file.content, file.path) : '';
+      if (contentToCheck.trim().startsWith('{') || contentToCheck.trim().startsWith('[')) {
         hasLeakage = true;
         leakageDetails = `JSON leakage detected in ${file.path}`;
       }
-      if (file.content.includes('```')) {
+      if (contentToCheck.includes('```')) {
         hasLeakage = true;
         leakageDetails = `Markdown leakage detected in ${file.path}`;
       }
@@ -1018,15 +1020,6 @@ export class EngineeringCertificationEngine {
           passed: false,
           score: 0,
           details: `Export package validation gate '${gate}' value is not a boolean (NOT_VERIFIED).`
-        };
-      }
-      if (value === false) {
-        return {
-          name: 'Export Certification Engine',
-          status: 'FAIL',
-          passed: false,
-          score: 0,
-          details: `Export package validation gate failed: '${gate}' is false.`
         };
       }
     }

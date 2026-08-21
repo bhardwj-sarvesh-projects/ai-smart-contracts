@@ -135,11 +135,11 @@ export default function GenerationLoader({
                       errData = { message: rawMsg };
                     }
 
-                    const stage = errData.stage || 'Execution';
-                    const engine = errData.engine || 'EngineeringCore';
-                    const file = errData.file || 'AuthoritativePipelineRouter.ts';
-                    const errorCode = errData.errorCode || 'PIPELINE_ERROR';
-                    const message = errData.message || rawMsg;
+                    const stage = errData.stage || (errData.code === 'NETWORK_ERROR' ? 'Network Ingress' : 'Execution');
+                    const engine = errData.engine || (errData.code === 'NETWORK_ERROR' ? 'API Gateway' : 'EngineeringCore');
+                    const file = errData.file || (errData.url ? errData.url : 'AuthoritativePipelineRouter.ts');
+                    const errorCode = errData.errorCode || errData.code || 'PIPELINE_ERROR';
+                    const message = errData.message || (typeof errData.error === 'string' ? errData.error : errData.error?.message) || rawMsg;
                     const command = errData.command;
                     const exitCode = errData.exitCode;
                     const stdout = errData.stdout;

@@ -108,8 +108,12 @@ export class DependencyValidationEngine {
     const violations: string[] = [];
 
     files.forEach(file => {
-      const content = file.content;
       const p = file.path.toLowerCase();
+      // Ignore documentation, markdown, reports, json, txt, configs for code purity check
+      if (p.endsWith('.md') || p.endsWith('.json') || p.endsWith('.txt') || p.endsWith('.toml') || p.endsWith('.yaml') || p.endsWith('.yml')) {
+        return;
+      }
+      const content = file.content;
 
       if (blockchain === 'Solana' || language === 'Rust') {
         if (content.includes('@openzeppelin/contracts') || content.includes('pragma solidity')) {
@@ -195,7 +199,14 @@ export class DependencyValidationEngine {
 
     if (blockchain === 'Ethereum/EVM') {
       const pkgFile = files.find(f => f.path.toLowerCase() === 'package.json');
-      if (pkgFile) {
+      const foundryFile = files.find(f => f.path.toLowerCase() === 'foundry.toml');
+
+      if (framework === 'Foundry' || (foundryFile && !pkgFile)) {
+        if (!foundryFile) {
+          passed = false;
+          details.push('Foundry project is missing foundry.toml configuration file');
+        }
+      } else if (pkgFile) {
         try {
           const parsed = JSON.parse(pkgFile.content);
           const allDeps = { ...(parsed.dependencies || {}), ...(parsed.devDependencies || {}) };
@@ -212,7 +223,7 @@ export class DependencyValidationEngine {
         }
       } else {
         passed = false;
-        details.push('EVM project is missing package.json dependency descriptor');
+        details.push('EVM project is missing package.json or foundry.toml dependency descriptor');
       }
     } else if (blockchain === 'Solana') {
       const cargoFile = files.find(f => f.path.toLowerCase() === 'cargo.toml');
@@ -288,9 +299,9 @@ export class DependencyValidationEngine {
     const details: string[] = [];
 
     if (blockchain === 'Ethereum/EVM') {
-      const hasDeployScript = files.some(f => f.path.startsWith('scripts/') || f.path.startsWith('migrations/'));
+      const hasDeployScript = files.some(f => f.path.startsWith('scripts/') || f.path.startsWith('migrations/') || f.path.startsWith('script/') || f.path.includes('deploy') || f.path.includes('Deploy'));
       if (!hasDeployScript) {
-        details.push('Missing deployment script in scripts/ for EVM SDK deployment');
+        details.push('Missing deployment script for EVM SDK deployment');
       }
     } else if (blockchain === 'Solana') {
       const hasAnchorToml = files.some(f => f.path.toLowerCase() === 'anchor.toml');

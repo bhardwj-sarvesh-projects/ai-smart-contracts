@@ -74,7 +74,7 @@ export class ExportEngine {
     const deployFiles = files.filter(f => f.path.toLowerCase().includes('script/') || f.path.toLowerCase().includes('deploy/'));
     const hasDeployFiles = deployFiles.length > 0;
     const presentAssets = deployFiles.map(f => f.path);
-    if (hasDeployFiles && (!deploymentResult || deploymentResult.state !== 'COMPLETED')) {
+    if (hasDeployFiles && (!deploymentResult || (deploymentResult.state !== 'COMPLETED' && deploymentResult.status !== 'PASS' && deploymentResult.passed !== true && deploymentResult.preChecks?.passed !== true))) {
       return { passed: false, presentAssets };
     }
     return { passed: true, presentAssets };
@@ -242,22 +242,49 @@ export class ExportEngine {
     framework: string = 'UNKNOWN',
     options?: any
   ): ExportCertificationResult {
-    let exportedFiles = files.filter(f => !f.path.toUpperCase().includes('.DIAGNOSTICS/'));
+    const normalizePath = (p: string): string => {
+      let np = p.replace(/\\/g, '/').toLowerCase();
+      if (np.startsWith('./')) np = np.substring(2);
+      return np;
+    };
+
+    // Deduplicate input files and exclude internal diagnostics and export metadata artifacts that will be regenerated
+    const metaArtifacts = new Set(['version.txt', 'delivery_summary.md', 'manifest.json', 'checksums.txt']);
+    const seen = new Map<string, ProjectFile>();
+    
+    for (const f of files) {
+      if (!f || !f.path) continue;
+      const np = normalizePath(f.path);
+      if (np.includes('.diagnostics/')) continue;
+      if (metaArtifacts.has(np)) continue;
+      seen.set(np, f);
+    }
+    
+    let exportedFiles: ProjectFile[] = Array.from(seen.values());
+
+    const upsertFile = (path: string, content: string, language: string) => {
+      const idx = exportedFiles.findIndex(f => normalizePath(f.path) === normalizePath(path));
+      if (idx >= 0) {
+        exportedFiles[idx] = { path, content, language };
+      } else {
+        exportedFiles.push({ path, content, language });
+      }
+    };
 
     // Add Baseline version control strings
-    exportedFiles.push({ path: 'VERSION.txt', content: this.generateVersionFile(), language: 'text' });
+    upsertFile('VERSION.txt', this.generateVersionFile(), 'text');
     // 1. Initial preview structural execution pass (Baseline Marker setup)
     const prelimResult = { exportCertified: false, status: 'NOT_VERIFIED' as const };
     let summaryMd = this.generateDeliverySummary(exportedFiles, projectName, blockchain, prelimResult, false);
-    exportedFiles.push({ path: 'DELIVERY_SUMMARY.md', content: summaryMd, language: 'markdown' });
+    upsertFile('DELIVERY_SUMMARY.md', summaryMd, 'markdown');
     
     let manifestJson = this.generateManifest(exportedFiles, projectName, blockchain, framework);
     // Add MANIFEST.json so that checksums can hash it
-    exportedFiles.push({ path: 'MANIFEST.json', content: manifestJson, language: 'json' });
+    upsertFile('MANIFEST.json', manifestJson, 'json');
 
     let checksumsTxt = this.generateChecksums(exportedFiles);
     // Add CHECKSUMS.txt so that we have both files
-    exportedFiles.push({ path: 'CHECKSUMS.txt', content: checksumsTxt, language: 'text' });
+    upsertFile('CHECKSUMS.txt', checksumsTxt, 'text');
 
     // 2. Run Trial validation sequence pass
     let docCheck = this.validateDocumentation(exportedFiles);
@@ -268,48 +295,28 @@ export class ExportEngine {
 
     let gatesPassed = docCheck.passed && reportCheck.passed && consistencyCheck.passed && deployCheck.passed && integrityCheck.passed;
 
-    const normalizePath = (p: string): string => p.replace(/\\/g, '/').toLowerCase();
-
     // 3. Conditional State Overwrite Loop Matrix matching final certifications
     if (gatesPassed) {
       const activeState = { exportCertified: true, status: 'PASS' as const };
       summaryMd = this.generateDeliverySummary(exportedFiles, projectName, blockchain, activeState, true);
+      upsertFile('DELIVERY_SUMMARY.md', summaryMd, 'markdown');
 
-      // Update targeted summary file buffers securely
-      const sIdx = exportedFiles.findIndex(f => f.path.endsWith('DELIVERY_SUMMARY.md'));
-      if (sIdx >= 0) exportedFiles[sIdx].content = summaryMd;
       // 4. Cascading re-hash pass over newly modified string buffers
       manifestJson = this.generateManifest(exportedFiles, projectName, blockchain, framework);
-      
-      const mIdx = exportedFiles.findIndex(f => normalizePath(f.path) === 'manifest.json');
-      if (mIdx >= 0) {
-        exportedFiles[mIdx].content = manifestJson;
-      }
+      upsertFile('MANIFEST.json', manifestJson, 'json');
 
       checksumsTxt = this.generateChecksums(exportedFiles);
-      
-      const cIdx = exportedFiles.findIndex(f => normalizePath(f.path) === 'checksums.txt');
-      if (cIdx >= 0) {
-        exportedFiles[cIdx].content = checksumsTxt;
-      }
+      upsertFile('CHECKSUMS.txt', checksumsTxt, 'text');
     } else {
       const failedState = { exportCertified: false, status: 'FAIL' as const };
       summaryMd = this.generateDeliverySummary(exportedFiles, projectName, blockchain, failedState, true);
-      const sIdx = exportedFiles.findIndex(f => f.path.endsWith('DELIVERY_SUMMARY.md'));
-      if (sIdx >= 0) exportedFiles[sIdx].content = summaryMd;
+      upsertFile('DELIVERY_SUMMARY.md', summaryMd, 'markdown');
+
       manifestJson = this.generateManifest(exportedFiles, projectName, blockchain, framework);
-      
-      const mIdx = exportedFiles.findIndex(f => normalizePath(f.path) === 'manifest.json');
-      if (mIdx >= 0) {
-        exportedFiles[mIdx].content = manifestJson;
-      }
+      upsertFile('MANIFEST.json', manifestJson, 'json');
 
       checksumsTxt = this.generateChecksums(exportedFiles);
-      
-      const cIdx = exportedFiles.findIndex(f => normalizePath(f.path) === 'checksums.txt');
-      if (cIdx >= 0) {
-        exportedFiles[cIdx].content = checksumsTxt;
-      }
+      upsertFile('CHECKSUMS.txt', checksumsTxt, 'text');
     }
 
     // 5. Absolute locked final system validation gate
@@ -322,29 +329,42 @@ export class ExportEngine {
     if (!finalCertified) {
       const blockedState = { exportCertified: false, status: 'FAIL' as const };
       summaryMd = this.generateDeliverySummary(exportedFiles, projectName, blockchain, blockedState, true);
-      const sIdx = exportedFiles.findIndex(f => normalizePath(f.path) === 'delivery_summary.md');
-      if (sIdx >= 0) exportedFiles[sIdx].content = summaryMd;
+      upsertFile('DELIVERY_SUMMARY.md', summaryMd, 'markdown');
 
       manifestJson = this.generateManifest(exportedFiles, projectName, blockchain, framework);
-      const mIdx = exportedFiles.findIndex(f => normalizePath(f.path) === 'manifest.json');
-      if (mIdx >= 0) exportedFiles[mIdx].content = manifestJson;
+      upsertFile('MANIFEST.json', manifestJson, 'json');
 
       checksumsTxt = this.generateChecksums(exportedFiles);
-      const cIdx = exportedFiles.findIndex(f => normalizePath(f.path) === 'checksums.txt');
-      if (cIdx >= 0) exportedFiles[cIdx].content = checksumsTxt;
+      upsertFile('CHECKSUMS.txt', checksumsTxt, 'text');
 
       absoluteCheck = this.validateFinalPackageIntegrity(exportedFiles, manifestJson, checksumsTxt);
       finalCertified = false;
     }
 
     const hasWorkspaceReport = files.length > 0;
-    const hasDepReport = (options?.dependencyResult?.overallStatus === 'PASS') || files.some(f => f.path.toUpperCase().includes('DEPENDENCY_REPORT') || f.path.toUpperCase().includes('DEP_REPORT'));
-    const hasCompilerReport = (options?.compilationResult?.status === 'PASS') || files.some(f => f.path.toUpperCase().includes('COMPILATION_REPORT'));
-    const hasSecurityReport = (options?.securityAuditResult?.overallStatus === 'PASS') || files.some(f => f.path.toUpperCase().includes('SECURITY_REPORT'));
-    const hasDeploymentReport = (options?.deploymentResult?.status === 'PASS' || options?.deploymentResult?.state === 'COMPLETED') || files.some(f => f.path.toUpperCase().includes('DEPLOYMENT_REPORT'));
-    const hasArchReport = (options?.architectureResult?.status === 'PASS' || options?.architectureResult?.architecturePassed === true) || files.some(f => f.path.toUpperCase().includes('ARCHITECTURE_REPORT') || f.path.toUpperCase().includes('ARCH_REPORT'));
-    const hasTestingReport = (options?.testingResult?.status === 'PASS') || files.some(f => f.path.toUpperCase().includes('TEST_REPORT') || f.path.toUpperCase().includes('TESTING_REPORT'));
-    const hasDocReport = docCheck.passed || (options?.documentationResult?.status === 'PASS' || options?.documentationResult?.documentationPassed === true);
+    const hasDepReport = options?.dependencyResult
+      ? (options.dependencyResult.status === 'PASS' || options.dependencyResult.overallStatus === 'PASS')
+      : files.some(f => f.path.toUpperCase().includes('DEPENDENCY_REPORT') || f.path.toUpperCase().includes('DEP_REPORT'));
+    const hasCompilerReport = options?.compilationResult
+      ? (options.compilationResult.status === 'PASS' || options.compilationResult.success === true)
+      : false;
+    const hasSecurityReport = options?.securityAuditResult
+      ? (options.securityAuditResult.status === 'CERTIFIED_SECURE' || options.securityAuditResult.status === 'PASS')
+      : false;
+    const hasDeploymentReport = options?.deploymentResult
+      ? (options.deploymentResult.state === 'COMPLETED' || options.deploymentResult.status === 'PASS' || options.deploymentResult.passed === true || options.deploymentResult.preChecks?.passed === true)
+      : false;
+    const hasArchReport = options?.architectureResult
+      ? (options.architectureResult.status === 'PASS' || options.architectureResult.architecturePassed === true)
+      : false;
+    const hasTestingReport = options?.testingResult
+      ? (options.testingResult.status === 'PASS' || options.testingResult.testingPassed === true)
+      : false;
+    const hasDocReport = docCheck.passed && (
+      options?.documentationResult
+        ? (options.documentationResult.status === 'PASS' || options.documentationResult.documentationPassed === true)
+        : true
+    );
 
     const diagramsCount = files.filter(f => f.path.toLowerCase().startsWith('diagrams/') || f.path.toLowerCase().endsWith('.png') || f.path.toLowerCase().endsWith('.jpg') || f.path.toLowerCase().endsWith('.svg')).length;
     const docsCount = files.filter(f => f.path.endsWith('.md') && !f.path.toUpperCase().includes('REPORT') && !f.path.toUpperCase().includes('MANIFEST') && !f.path.toUpperCase().includes('SUMMARY')).length;

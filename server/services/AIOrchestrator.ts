@@ -46,21 +46,29 @@ function modelUnavailableKey(credentialId: string, model: string): string {
 }
 
 function isModelTemporarilyUnavailable(credentialId: string, model: string): boolean {
+  const globalKey = `*:${model}`;
   const key = modelUnavailableKey(credentialId, model);
+  const now = Date.now();
+
+  const globalExpires = unavailableModels.get(globalKey) || 0;
+  if (globalExpires > now) return true;
+  if (globalExpires) unavailableModels.delete(globalKey);
+
   const expiresAt = unavailableModels.get(key) || 0;
-  if (!expiresAt) return false;
-  if (expiresAt <= Date.now()) {
-    unavailableModels.delete(key);
-    return false;
-  }
-  return true;
+  if (expiresAt > now) return true;
+  if (expiresAt) unavailableModels.delete(key);
+
+  return false;
 }
 
-function markModelUnavailable(credentialId: string, model: string): void {
-  unavailableModels.set(
-    modelUnavailableKey(credentialId, model),
-    Date.now() + MODEL_UNAVAILABLE_TTL_MS,
-  );
+function markModelUnavailable(
+  credentialId: string,
+  model: string,
+  ttlMs = MODEL_UNAVAILABLE_TTL_MS,
+  global = false,
+): void {
+  const key = global ? `*:${model}` : modelUnavailableKey(credentialId, model);
+  unavailableModels.set(key, Date.now() + ttlMs);
 }
 
 function buildSystem(systemInstruction?: string, responseMimeType?: string): string {
@@ -335,10 +343,25 @@ async function executeGroq(
 
     if (failureType === "RATE_LIMIT_ERROR" || failureType === "TEMPORARY_TPM_RATE_LIMIT") {
       TokenBudgetEngine.updateTPMUsageFromError("groq", safeErrorMessage(error));
-      groqGlobalCooldownUntil = Math.max(
-        groqGlobalCooldownUntil,
-        Date.now() + Math.max(1_000, retryAfterMs || 10_000),
-      );
+      const parsedRetryMs = Math.max(1_000, retryAfterMs || 4_000);
+
+      // If the cooldown is reasonable (<= 15 seconds), pause and retry the request once internally
+      if (parsedRetryMs <= 15_000 && !request.options?.skipInternalRetry) {
+        console.log(`[AIOrchestrator] Groq TPM limit hit (${parsedRetryMs}ms). Pausing and retrying execution...`);
+        await sleep(parsedRetryMs + 250);
+        return executeGroq(
+          credential,
+          apiKey,
+          modelEntry,
+          {
+            ...request,
+            options: {
+              ...request.options,
+              skipInternalRetry: true,
+            },
+          },
+        );
+      }
 
       throw buildStructuredError(
         "TEMPORARY_TPM_RATE_LIMIT",
@@ -408,15 +431,21 @@ export class AIOrchestrator {
 
   static async execute(request: OrchestratorRequest): Promise<OrchestratorResult> {
     if (groqGlobalCooldownUntil > Date.now()) {
-      const retryAfterMs = Math.max(500, groqGlobalCooldownUntil - Date.now());
-      throw buildStructuredError(
-        "TEMPORARY_TPM_RATE_LIMIT",
-        `Groq organization TPM capacity is temporarily exhausted. Retry in approximately ${Math.ceil(retryAfterMs / 1000)} seconds.`,
-        429,
-        "groq",
-        getModelPolicy(request.task)[0]?.model || "",
-        retryAfterMs,
-      );
+      const remainingMs = groqGlobalCooldownUntil - Date.now();
+      if (remainingMs <= 15_000) {
+        console.log(`[AIOrchestrator] Global Groq TPM cooldown active (${remainingMs}ms remaining). Pausing before execution...`);
+        await sleep(remainingMs + 250);
+      } else {
+        const retryAfterMs = Math.max(500, remainingMs);
+        throw buildStructuredError(
+          "TEMPORARY_TPM_RATE_LIMIT",
+          `Groq organization TPM capacity is temporarily exhausted. Retry in approximately ${Math.ceil(retryAfterMs / 1000)} seconds.`,
+          429,
+          "groq",
+          getModelPolicy(request.task)[0]?.model || "",
+          retryAfterMs,
+        );
+      }
     }
 
     const group = getRoutingGroupForTask(request.task);
@@ -433,13 +462,10 @@ export class AIOrchestrator {
     }
 
     // Exactly the 20 database-managed credential slots are the pool.
-    // Task routing is deterministic to the dedicated slot group.
-    const allEnabled = await AICredentialService.getEnabled();
-    const dedicated = allEnabled.filter((credential) =>
-      findCredentialSlotGroup(credential, group.slots),
-    );
+    // Task routing starts with dedicated slots and overflows to healthy pool keys.
+    const credentialsForTask = await AICredentialService.getEnabledForTask(request.task);
 
-    if (!dedicated.length) {
+    if (!credentialsForTask.length) {
       throw buildStructuredError(
         "NO_AI_CREDENTIALS_FOR_TASK",
         `No enabled Groq API credentials are available for workload '${group.label}'.`,
@@ -449,12 +475,10 @@ export class AIOrchestrator {
       );
     }
 
-    const orderedCredentials = rotateWithinGroup(
-      dedicated.sort((a, b) => a.priority - b.priority),
-      group.id,
-    );
+    const orderedCredentials = rotateWithinGroup(credentialsForTask, group.id);
 
     let lastError: any = null;
+    let attemptedRoutes = 0;
 
     for (const credential of orderedCredentials) {
       const secret = await AICredentialService.getSecret(credential.id);
@@ -462,12 +486,13 @@ export class AIOrchestrator {
 
       // Predictable model behavior:
       // 1 primary model for a normal request.
-      // Fallback to model #2/#3 ONLY when the specific model is unavailable.
+      // Fallback to model #2/#3 when the specific model is unavailable or rate-limited.
       for (const modelEntry of modelPolicy) {
         if (isModelTemporarilyUnavailable(credential.id, modelEntry.model)) {
           continue;
         }
 
+        attemptedRoutes++;
         try {
           const response = await executeGroq(
             credential,
@@ -493,19 +518,31 @@ export class AIOrchestrator {
           lastError = error;
 
           const failureType = classifyAIError(error);
+          const errMsg = safeErrorMessage(error);
           const retryAfter = TokenBudgetEngine.extractRetryAfter(
-            safeErrorMessage(error),
+            errMsg,
             error?.headers || error?.response?.headers,
           );
           const retryAfterMs = TokenBudgetEngine.parseDurationToMs(retryAfter);
+          const isRateLimit = isRateLimitFailure(failureType);
 
-          if (failureType === "MODEL_UNAVAILABLE") {
-            markModelUnavailable(credential.id, modelEntry.model);
-          }
-
-          const cooldownMs = isRateLimitFailure(failureType)
+          const cooldownMs = isRateLimit
             ? Math.max(10_000, retryAfterMs || 30_000)
             : cooldownFor(failureType, error);
+
+          // Mark model temporarily unavailable so fallback models are used seamlessly
+          if (failureType === "MODEL_UNAVAILABLE" || isRateLimit) {
+            const ttl = isRateLimit
+              ? Math.max(30_000, retryAfterMs || 60_000)
+              : MODEL_UNAVAILABLE_TTL_MS;
+            const isOrgOrModelLimit = isRateLimit && /model|tpd|tpm|organization|limit/i.test(errMsg);
+            markModelUnavailable(
+              credential.id,
+              modelEntry.model,
+              ttl,
+              isOrgOrModelLimit,
+            );
+          }
 
           await AICredentialService.record(
             credential.id,
@@ -514,28 +551,26 @@ export class AIOrchestrator {
             cooldownMs,
           );
 
-          // A shared organization-level 429 must stop the entire route ladder.
-          if (isRateLimitFailure(failureType)) {
-            groqGlobalCooldownUntil = Math.max(
-              groqGlobalCooldownUntil,
-              Date.now() + Math.max(1_000, retryAfterMs || 10_000),
-            );
-            throw error;
-          }
-
-          // Authentication/billing failures invalidate this credential for the
-          // remainder of the cooldown; move to the next credential.
+          // Authentication/billing failures invalidate this credential; move to next credential.
           if (isKeyTerminalFailure(failureType)) {
             break;
           }
 
-          // Only 404/403 model-access failures should advance to the next model
-          // on the same credential.
-          if (!modelFallbackAllowed(failureType)) {
-            break;
-          }
+          // For rate limits or model failures, continue inner loop to try fallback model (e.g. qwen/qwen3.6-27b or gpt-oss-20b)
         }
       }
+    }
+
+    if (lastError && isRateLimitFailure(classifyAIError(lastError))) {
+      const retryAfter = TokenBudgetEngine.extractRetryAfter(
+        safeErrorMessage(lastError),
+        lastError?.headers || lastError?.response?.headers,
+      );
+      const retryAfterMs = TokenBudgetEngine.parseDurationToMs(retryAfter);
+      groqGlobalCooldownUntil = Math.max(
+        groqGlobalCooldownUntil,
+        Date.now() + Math.max(1_000, retryAfterMs || 10_000),
+      );
     }
 
     const code = classifyAIError(lastError);

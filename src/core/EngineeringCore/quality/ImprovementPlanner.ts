@@ -72,20 +72,21 @@ Please refine and return the complete project files addressing all recommendatio
     }
 
     // 2. Add Test file if missing
-    const hasTests = enrichedFiles.some(f => f.path.includes('test') || f.path.includes('spec'));
+    const hasTests = enrichedFiles.some(f => f.path.toLowerCase().includes('test') || f.path.toLowerCase().includes('spec'));
     if (!hasTests || report.weakAreas.includes('testing')) {
       const testFile = TestingService.generateTestTemplate(project.blockchain, lang, mainContractName);
-      if (!enrichedFiles.some(f => f.path === testFile.path)) {
+      if (!enrichedFiles.some(f => f.path.toLowerCase() === testFile.path.toLowerCase())) {
         enrichedFiles.push(testFile);
       }
     }
 
     // 3. Add Script file if missing
-    const hasScript = enrichedFiles.some(f => f.path.includes('script') || f.path.includes('deploy'));
-    if (!hasScript || report.weakAreas.includes('deploymentReadiness')) {
+    const hasScript = enrichedFiles.some(f => f.path.toLowerCase().includes('script') || f.path.toLowerCase().includes('deploy'));
+    const deployScriptPath = `script/Deploy${mainContractName}.s.sol`;
+    if ((!hasScript || report.weakAreas.includes('deploymentReadiness')) && !enrichedFiles.some(f => f.path.toLowerCase() === deployScriptPath.toLowerCase())) {
       if (lang === 'solidity') {
         enrichedFiles.push({
-          path: `script/Deploy${mainContractName}.s.sol`,
+          path: deployScriptPath,
           content: `// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\nimport "forge-std/Script.sol";\nimport "../${mainContractFile ? mainContractFile.path : 'src/Contract.sol'}";\n\n/**\n * @title Deploy${mainContractName}\n * @notice Deployment script for ${mainContractName} on target networks\n */\ncontract Deploy${mainContractName} is Script {\n    function run() external {\n        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");\n        vm.startBroadcast(deployerPrivateKey);\n        new ${mainContractName}();\n        vm.stopBroadcast();\n    }\n}\n`,
           language: 'solidity'
         });
@@ -93,10 +94,11 @@ Please refine and return the complete project files addressing all recommendatio
     }
 
     // 4. Add Interface file if missing
-    const hasInterface = enrichedFiles.some(f => f.path.includes('interface') || f.path.startsWith('I'));
-    if (!hasInterface && lang === 'solidity') {
+    const hasInterface = enrichedFiles.some(f => f.path.toLowerCase().includes('interface') || f.path.split('/').pop()?.startsWith('I'));
+    const ifacePath = `src/interfaces/I${mainContractName}.sol`;
+    if ((!hasInterface && lang === 'solidity') && !enrichedFiles.some(f => f.path.toLowerCase() === ifacePath.toLowerCase())) {
       enrichedFiles.push({
-        path: `src/interfaces/I${mainContractName}.sol`,
+        path: ifacePath,
         content: `// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\n/**\n * @title I${mainContractName}\n * @notice Standard NatSpec interface for ${mainContractName}\n */\ninterface I${mainContractName} {\n    error Unauthorized();\n    error InvalidParameter();\n    event Executed(address indexed caller, uint256 timestamp);\n}\n`,
         language: 'solidity'
       });
@@ -106,7 +108,7 @@ Please refine and return the complete project files addressing all recommendatio
     const hasReadme = enrichedFiles.some(f => f.path.toLowerCase() === 'readme.md');
     if (!hasReadme || report.weakAreas.includes('documentation')) {
       const readmePath = 'README.md';
-      const existingReadme = enrichedFiles.find(f => f.path.toLowerCase() === readmePath);
+      const existingReadme = enrichedFiles.find(f => f.path.toLowerCase() === readmePath.toLowerCase());
       if (!existingReadme) {
         enrichedFiles.push({
           path: readmePath,

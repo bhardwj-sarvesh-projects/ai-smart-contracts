@@ -14,7 +14,13 @@ export class FrontendValidator {
 
     if (ext === 'html') {
       // Validate HTML syntax
-      const lines = trimmedContent.split('\n');
+      let workingContent = trimmedContent;
+      const firstAngleIdx = workingContent.indexOf('<');
+      if (firstAngleIdx > 0) {
+        workingContent = workingContent.slice(firstAngleIdx).trim();
+      }
+
+      const lines = workingContent.split('\n');
       let firstTagLine = '';
       for (const l of lines) {
         const line = l.trim();
@@ -24,8 +30,19 @@ export class FrontendValidator {
       }
 
       if (!firstTagLine.startsWith('<!doctype') && !firstTagLine.startsWith('<html')) {
-        throw new Error(`INVALID_AI_RESPONSE: HTML file ${path} must begin with <!DOCTYPE or <html`);
+        if (workingContent.startsWith('<')) {
+          workingContent = `<!DOCTYPE html>\n<html lang="en">\n${workingContent}\n</html>`;
+        } else if (workingContent.length > 0) {
+          workingContent = `<!DOCTYPE html>\n<html lang="en">\n  <head>\n    <meta charset="UTF-8" />\n    <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n    <title>App</title>\n  </head>\n  <body>\n    <div id="root"></div>\n    ${workingContent}\n  </body>\n</html>`;
+        } else {
+          workingContent = `<!DOCTYPE html>\n<html lang="en">\n  <head>\n    <meta charset="UTF-8" />\n    <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n    <title>App</title>\n  </head>\n  <body>\n    <div id="root"></div>\n    <script type="module" src="/src/main.tsx"></script>\n  </body>\n</html>`;
+        }
       }
+      return {
+        path: normalizedPath,
+        content: workingContent,
+        language: language || 'html'
+      };
     } else if (['jsx', 'tsx', 'js', 'ts'].includes(ext)) {
       // Reject if it is valid JSON
       if (trimmedContent.trim().startsWith('{')) {

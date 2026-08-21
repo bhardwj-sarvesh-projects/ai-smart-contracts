@@ -813,7 +813,15 @@ graph TD
     prompt: string,
     blockchain: string
   ): ProjectFile[] {
-    const updatedFiles = [...files];
+    const normalize = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+    const fileMap = new Map<string, ProjectFile>();
+    
+    // Seed with incoming files, deduplicated by normalized path
+    for (const f of files) {
+      if (f && f.path) {
+        fileMap.set(normalize(f.path), f);
+      }
+    }
 
     const docsToGenerate = [
       { path: 'README.md', fn: () => this.generateReadme(files, projectName, prompt, blockchain) },
@@ -835,16 +843,11 @@ graph TD
     ];
 
     docsToGenerate.forEach(doc => {
-      const idx = updatedFiles.findIndex(f => f.path.toUpperCase() === doc.path.toUpperCase());
       const content = doc.fn();
-      if (idx >= 0) {
-        updatedFiles[idx] = { path: doc.path, content, language: 'markdown' };
-      } else {
-        updatedFiles.push({ path: doc.path, content, language: 'markdown' });
-      }
+      fileMap.set(normalize(doc.path), { path: doc.path, content, language: 'markdown' });
     });
 
-    return updatedFiles;
+    return Array.from(fileMap.values());
   }
 
   /**

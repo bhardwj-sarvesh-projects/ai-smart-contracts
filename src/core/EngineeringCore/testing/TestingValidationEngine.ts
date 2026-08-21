@@ -1,9 +1,9 @@
 import { ProjectFile } from '../../../types';
 import { PatchEngine } from '../patch/PatchEngine';
 import { sha256 } from '../utils/cryptoFallback';
-import module from 'module';
+import { getNodeRequire } from '../utils/nodeRequire';
 
-const requireFn = typeof window === 'undefined' ? module.createRequire(import.meta.url) : null;
+const requireFn = getNodeRequire();
 const fs = requireFn ? requireFn('fs') : null;
 const path = requireFn ? requireFn('path') : null;
 const os = requireFn ? requireFn('os') : null;
@@ -150,8 +150,19 @@ export class TestingValidationEngine {
     const testFilePaths = testFiles.map(f => f.path);
     const workspaceHash = sha256(JSON.stringify(files));
 
-    const tmpBase = os && os.tmpdir ? os.tmpdir() : process.cwd();
-    const workspacePath = path.resolve(tmpBase, 'forge_workspace_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7));
+    // `path` and `process` are Node-only. In the browser both `path` and
+    // `os` are null (see requireFn above) and `process` is not declared at
+    // all, so the previous unconditional `path.resolve(...process.cwd()...)`
+    // threw before the "toolchain unavailable" guard a few lines below ever
+    // got a chance to run. Compute a safe placeholder instead; it is only
+    // ever used for real execution, which is itself gated on `path` being
+    // non-null (see the `!this.spawnSyncFn || !fs || !path` check below).
+    const tmpBase = (os && os.tmpdir)
+      ? os.tmpdir()
+      : (typeof process !== 'undefined' && process.cwd ? process.cwd() : '/tmp');
+    const workspacePath = path
+      ? path.resolve(tmpBase, 'forge_workspace_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7))
+      : 'N/A';
 
     // Resolve expected command based on ecosystem
     let expectedCommand = 'forge test';

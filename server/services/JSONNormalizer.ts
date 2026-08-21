@@ -5,8 +5,11 @@ export class JSONNormalizer {
   static cleanRawText(rawText: string): string {
     if (!rawText) return '{}';
     
-    // 1. Strip BOM and trim whitespace
-    let cleaned = rawText.replace(/^\uFEFF/, '').trim();
+    // 1. Strip reasoning blocks, BOM and trim whitespace
+    let cleaned = rawText
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/^\uFEFF/, '')
+      .trim();
 
     // 2. Extract markdown code block if present
     const markdownMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
